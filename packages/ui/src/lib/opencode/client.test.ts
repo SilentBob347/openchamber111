@@ -156,6 +156,27 @@ describe("error normalisation", () => {
     expect(error).toMatchObject({ status: 404, tag: "SessionNotFoundError", operation: "session.get" })
   })
 
+  // Only routes that declare a 500 body deliver it: the generated client
+  // cancels an undeclared status' body and reports the status alone.
+  test("a declared 500 body keeps the log ref OpenCode printed next to its stack", async () => {
+    responses.push(json({ _tag: "UnknownError", message: "Unexpected server error. Check server logs for details.", ref: "err_07817ddc" }, 500))
+    const error = await opencodeClient.getSessionMessages("ses_x", { limit: 10 }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect(error).toMatchObject({
+      status: 500,
+      tag: "UnknownError",
+      ref: "err_07817ddc",
+      detail: "Unexpected server error. Check server logs for details.",
+    })
+  })
+
+  test("an undeclared 500 arrives without its body, so no ref can be quoted", async () => {
+    responses.push(json({ _tag: "UnknownError", message: "boom", ref: "err_07817ddc" }, 500))
+    const error = await opencodeClient.renameSession("ses_x", "Title").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect(error).toMatchObject({ status: 500, operation: "session.update", ref: undefined })
+  })
+
   test("an undeclared status is reported with that status", async () => {
     responses.push(new Response("boom", { status: 500 }))
     const error = await opencodeClient.getSession("ses_x").catch((e: unknown) => e)

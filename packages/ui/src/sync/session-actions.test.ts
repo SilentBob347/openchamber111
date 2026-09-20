@@ -1145,6 +1145,25 @@ describe("updateSessionTitle live state", () => {
     expect((globalUpsertedSessions[0] as Session)?.title).toBe("New Title")
     expect(sessionStore.getState().session[0].title).toBe("New Title")
   })
+
+  test("renames a worktree session against its own directory, not the project root that indexes its status", async () => {
+    const worktreeSession = { ...sessionFixture("session-wt"), directory: "/test/project/.worktrees/feature", title: "Old Title" }
+    globalActiveSessions = [worktreeSession]
+    sessionRecords.set("session-wt", worktreeSession)
+    // The project root's store knows the session only through the status index
+    // it receives for its worktrees; the session record itself lives elsewhere.
+    const rootStore = createStore({}, { session: [], session_status: { "session-wt": { type: "idle" } } })
+    const childStores = createChildStores([["/test/project", rootStore]])
+
+    const { setActionRefs, updateSessionTitle } = await import("./session-actions")
+    setActionRefs(childStores, () => "/test/project")
+
+    await updateSessionTitle("session-wt", "New Title")
+
+    const renameCall = replyCalls.find((call) => call.method === "session.rename")
+    expect(renameCall?.params.directory).toBe("/test/project/.worktrees/feature")
+    globalActiveSessions = []
+  })
 })
 
 describe("optimisticSend target directory", () => {

@@ -103,23 +103,32 @@ const STATUS_BY_TAG = new Map<string, number>([
   ["SessionBusyError", 409],
   ["FormAlreadySettledError", 409],
   ["ServiceUnavailableError", 503],
+  ["UnknownError", 500],
 ])
 
 export class OpencodeApiError extends Error {
   readonly operation: string
   readonly status: number | undefined
+  /** The error class OpenCode named in a tagged body (`SessionNotFoundError`, `UnknownError`, ...). */
   readonly tag: string | undefined
+  /** What the body said, without the operation prefix `message` carries. */
+  readonly detail: string
+  /** The id OpenCode prints next to the stack in its own log for a 500, so a
+      surface can quote something that can be searched for. */
+  readonly ref: string | undefined
 
-  constructor(operation: string, message: string, options: { status?: number; tag?: string; cause?: unknown }) {
+  constructor(operation: string, message: string, options: { status?: number; tag?: string; ref?: string; cause?: unknown }) {
     super(`${operation} failed${options.status ? ` (${options.status})` : ""}: ${message}`, { cause: options.cause })
     this.name = "OpencodeApiError"
     this.operation = operation
     this.status = options.status
     this.tag = options.tag
+    this.detail = message
+    this.ref = options.ref
   }
 }
 
-const taggedErrorSchema = z.object({ _tag: z.string(), message: z.string().optional() })
+const taggedErrorSchema = z.object({ _tag: z.string(), message: z.string().optional(), ref: z.string().optional() })
 
 /**
  * Turns whatever the generated client threw into an `OpencodeApiError` with a
@@ -150,6 +159,7 @@ export function normalizeOpencodeError(operation: string, error: unknown): Openc
     return new OpencodeApiError(operation, tagged.data.message ?? tagged.data._tag, {
       status: STATUS_BY_TAG.get(tagged.data._tag),
       tag: tagged.data._tag,
+      ref: tagged.data.ref,
       cause: error,
     })
   }
