@@ -5,7 +5,7 @@ Read [DESIGN.md](DESIGN.md) first.
 ## Delivery rules
 
 - One stage is one small pull request into `main`. The maintainer reads and merges each one, so a stage must be readable in one sitting. If a stage grows, split it.
-- The whole feature stays behind one switch. While the switch is off, the server registers none of the feature's routes, the UI shows none of its entry points, and nothing of the feature runs at all: see decisions 17 and 18 in [DESIGN.md](DESIGN.md). The switch gates the work while it is built, and at the first release it becomes the user's opt-in in Settings rather than being removed. The stage that builds the feature's settings screens builds it.
+- The whole feature stays behind one switch. While the switch is off, the server registers none of the feature's routes, the UI shows none of its entry points, and nothing of the feature runs at all: see decisions 17 to 19 in [DESIGN.md](DESIGN.md). The switch gates the work while it is built, and at the first release it becomes the user's opt-in in Settings rather than being removed. The stage that builds the feature's settings screens builds it.
 - Before each pull request: run the local bot review and fix its findings, run every escape test that exists so far, and complete the stage's checklist from [TESTING.md](TESTING.md).
 - A checklist line has two states: "passed, here is the evidence" or "blocked, here is the reason". There is no "skipped".
 - A personal integration branch for daily use is optional. Delivery goes through `main`.
@@ -41,6 +41,7 @@ Three more things stage 2 leaves for the stages that build the screens, all of t
 
 - Grants and the allowlist live in the gatekeeper's memory only, so they have to be set again after every start of a space, and after the machine restarts the space shows "needs access". DESIGN.md says that is what the user sees; some stage has to actually do it.
 - The journal is memory only too. The blocked-attempts view shows nothing from before the gatekeeper last started, and it has to say so. An empty list that means "the record is gone" must not read as "the agent tried nothing".
+- Turning the switch off stops every space and keeps its files, and the banner beside the switch has to say so before the user commits, with the count. Removing spaces is a separate action offered after the switch is off, never a checkbox beside the toggle: see decision 18. A space that could not be stopped is reported as still running.
 - A gatekeeper that has been removed is never made again. `start` brings back a stopped one, but a removed one means the space has to be applied or discarded and a new space made. Whichever stage owns a space's status and its repair actions has to say that in plain words.
 
 Later, in no fixed order: project-defined images, submodules, sandbox services, Copilot through the gatekeeper.
