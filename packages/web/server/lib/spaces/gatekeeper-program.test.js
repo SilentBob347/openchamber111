@@ -22,17 +22,29 @@ const SECRET = 'sk-the-real-key-the-space-never-sees';
 const PUBLIC_ADDRESS = '203.0.113.7';
 
 /**
- * The connection caps this gatekeeper runs with. Small, because a test has to exceed one, and a
- * drop only happens when a connection is *accepted* past the cap: a loaded machine accepts slowly
- * while the kernel's backlog keeps completing handshakes, so a flood of 300 clients against the
- * production cap of 128 can leave every client connected, nothing accepted past the cap, and the
- * flood unrecorded. Measured that way with the program stopped: 128 connected, no note, ever.
+ * The connection caps this gatekeeper runs with, and they are as small as the assertions allow.
  *
- * The corridor's stays above the 16 refused clients the program waits on at once, or a refusal
- * would fill this cap and the test above it would be testing the wrong thing. The production
- * numbers, 128, 64 and 8, are in the container command, which `docker.test.js` asserts whole.
+ * Small because a test has to exceed one, and a drop only happens when a connection is *accepted*
+ * past the cap: a loaded machine accepts slowly while the kernel's backlog keeps completing
+ * handshakes, so a flood of 300 clients against the production cap of 128 can leave every client
+ * connected, nothing accepted past the cap, and the flood unrecorded. Measured that way with the
+ * program stopped: 128 connected, no note, ever.
+ *
+ * And small because sockets are the scarce thing on a Windows host, where a closed port waits two
+ * minutes in TIME_WAIT before it comes back. Beside the three live Docker files, which hold the
+ * daemon for five to six minutes each, this file's worker died there. A flood proves "the cap
+ * refuses beyond it, and the refusal is noted once" at four as well as at a hundred, so the whole
+ * two loops that dominate this file now cost 124 sockets instead of 240: 60 for the refusals
+ * that must outnumber the cap, against 144, and 64 across the three floods, against 96.
+ *
+ * The corridor's is the one that cannot go lower: the program waits on up to 16 refused clients
+ * at once, and a cap at or under that would be filled by refusals alone, which is the opposite of
+ * what the test beside it proves. 20 leaves room for the handshake in flight.
+ *
+ * The production numbers, 128, 64 and 8, are in the container command, which `docker.test.js`
+ * asserts whole, so nothing here can raise them.
  */
-const CAPS = { corridor: 24, window: 8, control: 8 };
+const CAPS = { corridor: 20, window: 4, control: 4 };
 
 /** An address of this machine that is not loopback, as a container's own address is not. */
 const ownAddress = () => Object.values(os.networkInterfaces())
@@ -482,10 +494,11 @@ describe('gatekeeper program', () => {
     it('lets a refused socket go, so refusals cannot fill the connection cap', async () => {
       // One at a time, and each client keeps its socket after reading the refusal. With the
       // socket released at our end, every one of them is answered however long the clients hold
-      // on. Without it the cap fills — 128 in the container, 24 here — and everything after that
-      // is dropped, the corridor with it. Several times the cap, so the count means something at
-      // either number, and the program waits on at most 16 refused clients at once by design.
-      const attempts = CAPS.corridor * 6;
+      // on. Without it the cap fills — 128 in the container, 20 here — and everything after that
+      // is dropped, the corridor with it. Three times the cap, which is past the cap and past the
+      // 16 refused clients the program waits on at once, with room to spare and no more sockets
+      // than that needs: this loop was the most expensive thing in the file.
+      const attempts = CAPS.corridor * 3;
       const kept = [];
       const outcomes = [];
       for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -569,7 +582,7 @@ describe('gatekeeper program', () => {
       // on how fast the machine accepted: a drop happens when a connection is accepted past the
       // cap, and a loaded machine leaves them in the kernel's backlog instead, connected and
       // never accepted. It passed on three machines and failed on CI, where the whole repository
-      // runs in parallel. At twice a cap of 24 there is nothing to be slow about.
+      // runs in parallel. At twice a cap of 20 there is nothing to be slow about.
       const mark = await journalMark();
       const sockets = await hold(ports.corridor, CAPS.corridor * 2);
       expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.corridor);
