@@ -12,6 +12,7 @@ import { verifyGitLabToken } from './verify.js';
 import { isString } from './validation.js';
 import { createOAuthFlowRegistry } from '../source-control/oauth-flow-registry.js';
 import { digestMutationInput, mutationReceipt } from '../source-control/mutation-executor.js';
+import { createChangeRequestStatusCache } from '../source-control/status-cache.js';
 
 const accountView = (origin, account, current, accounts) => ({
   id: account.id,
@@ -43,6 +44,31 @@ const cliAccountView = (origin, user, current) => ({
 function requestOrigin(req) {
   return normalizeGitLabInstance(isString(req.query?.instance) ? req.query.instance : '');
 }
+
+const STATUS_CACHE_TTL_MS = 90_000;
+const STATUS_RESOLVE_TIMEOUT_MS = 12_000;
+
+const withTimeout = (promise, timeoutMs, label) => {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(Object.assign(new Error(`${label} timed out after ${timeoutMs}ms`), { code: 'ETIMEDOUT' }));
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
+
+// A failure the provider may recover from on its own: it was unreachable, it
+// asked for a pause, or it answered with a server error. A refused credential
+// or a rejected request is not one.
+const isTransientFailure = (error) => {
+  const upstreamStatus = error?.cause?.response?.status ?? error?.response?.status ?? error?.status;
+  if (upstreamStatus === 429 || (Number.isInteger(upstreamStatus) && upstreamStatus >= 500)) return true;
+  if (Number.isInteger(upstreamStatus)) return false;
+  const kind = classifyGitLabFailure(error);
+  return kind === 'unreachable' || kind === 'temporarily-unavailable';
+};
 
 function errorStatus(kind) {
   return kind === 'temporarily-unavailable' ? 503 : kind === 'unreachable' ? 502 : 500;
@@ -111,7 +137,9 @@ export function registerGitLabRoutes(app, options = {}) {
       renews: superseded.map((candidate) => ({ ...account, accountId: candidate.id })),
     });
   };
+  const statusCache = createChangeRequestStatusCache({ ttlMs: STATUS_CACHE_TTL_MS });
   const invalidateAccount = async (origin, accountId) => {
+    statusCache.invalidate({ instance: origin, accountId });
     await options.onAccountInvalidated?.(identityFor(origin, accountId));
     await store.markAccountInvalid(origin, accountId, 'unauthorized');
   };
@@ -385,6 +413,7 @@ export function registerGitLabRoutes(app, options = {}) {
         reconcile: async () => reconcile(service, await resolveReplay()),
         classifyError: classifyMutationError,
       });
+      statusCache.invalidate({ instance: context.instance, accountId: context.accountId, repositoryId: context.repositoryId });
       return mutationReceipt(execution.record, execution.replayed, resource.providerUserId);
     }
     const resolved = kind === 'change-request-create'
@@ -397,6 +426,7 @@ export function registerGitLabRoutes(app, options = {}) {
       reconcile: () => reconcile(service, resolved),
       classifyError: classifyMutationError,
     });
+    statusCache.invalidate({ instance: context.instance, accountId: context.accountId, repositoryId: context.repositoryId });
     return mutationReceipt(execution.record, execution.replayed, resource.providerUserId);
   };
 
@@ -607,8 +637,38 @@ export function registerGitLabRoutes(app, options = {}) {
       if (!directory || !branch) return res.status(400).json({ error: 'directory and branch are required' });
       const trustedContext = await validateReadContext(req, origin, directory);
       if (!trustedContext) return res.status(501).json({ error: 'Bound source control status is unavailable' });
-      const service = await getResourceService(origin, trustedContext.accountId, true);
-      return res.json(await service.changeRequestStatus(directory, branch, trustedContext.primaryRemote));
+      const force = req.query?.force === 'true' || req.query?.force === '1';
+      const remote = trustedContext.primaryRemote;
+      // The account is resolved before the cache is consulted, so a removed or
+      // rotated credential never receives an answer it did not earn.
+      const resource = await getResourceContext(origin, trustedContext.accountId, true);
+      const cacheContext = {
+        instance: origin, accountId: resource.accountId, credentialRevision: resource.credentialRevision,
+        repositoryId: trustedContext.repositoryId, bindingRevision: trustedContext.bindingRevision,
+        directory, branch, remote,
+      };
+      if (!force) {
+        const fresh = statusCache.fresh(cacheContext);
+        if (fresh) return res.json(fresh);
+      }
+      try {
+        const status = await withTimeout(
+          resource.service.changeRequestStatus(directory, branch, remote),
+          STATUS_RESOLVE_TIMEOUT_MS,
+          'GitLab change request status',
+        );
+        statusCache.store(cacheContext, status);
+        return res.json(statusCache.last(cacheContext));
+      } catch (error) {
+        // A badge keeps its last-known state through an outage; the client
+        // treats a 503 as "keep what you have" when nothing was seen yet.
+        if (isTransientFailure(error)) {
+          const last = statusCache.last(cacheContext);
+          if (last) return res.json(last);
+          return res.status(503).json({ error: error?.message || 'GitLab is temporarily unavailable' });
+        }
+        throw error;
+      }
     } catch (error) {
       if (isReadContextError(error)) {
         return res.status(error.status ?? 400).json(sourceControlErrorBody(error));

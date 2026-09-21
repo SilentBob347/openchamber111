@@ -529,6 +529,61 @@ describe('GitLab routes', () => {
     }
   });
 
+  describe('change request status cache', () => {
+    const statusFor = (branch) => ({ identity: { provider: 'gitlab', instance: origin }, project: null, branch, changeRequest: null });
+    const setup = (changeRequestStatus) => {
+      const base = canonicalMutationOptions();
+      base.service.changeRequestStatus = changeRequestStatus;
+      const app = appWith({ ...base.options, validateReadContext: async (context) => ({ ...context, accountId: base.account.id, primaryRemote: 'origin' }) });
+      const query = { instance: origin, directory: '/repo', branch: 'feature', repositoryId: 'repo_one', bindingRevision: 3, accountId: base.account.id };
+      const read = (extra = {}) => request(app).get('/api/source-control/gitlab/pr/status').query({ ...query, ...extra });
+      return { app, read, base };
+    };
+
+    it('answers a fresh repeat from the cache, and asks the provider again when forced', async () => {
+      const changeRequestStatus = vi.fn(async () => statusFor('feature'));
+      const { read } = setup(changeRequestStatus);
+      const first = await read().expect(200);
+      expect(first.body.fetchedAt).toEqual(expect.any(Number));
+      const second = await read().expect(200);
+      expect(second.body).toEqual(first.body);
+      expect(changeRequestStatus).toHaveBeenCalledTimes(1);
+      await read({ force: 'true' }).expect(200);
+      expect(changeRequestStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the last-known status through a transient failure, and answers 503 before any', async () => {
+      const failure = Object.assign(new Error('GitLab is down'), { response: { status: 502 } });
+      const changeRequestStatus = vi.fn(async () => { throw failure; });
+      const { read } = setup(changeRequestStatus);
+      await read().expect(503);
+      changeRequestStatus.mockImplementationOnce(async () => statusFor('feature'));
+      const seen = await read({ force: 'true' }).expect(200);
+      const stale = await read({ force: 'true' }).expect(200);
+      expect(stale.body).toEqual(seen.body);
+    });
+
+    it('never answers a refused credential from the cache', async () => {
+      const changeRequestStatus = vi.fn(async () => statusFor('feature'));
+      const { read, base } = setup(changeRequestStatus);
+      await read().expect(200);
+      changeRequestStatus.mockImplementationOnce(async () => { throw Object.assign(new Error('unauthorized'), { response: { status: 401 } }); });
+      await read({ force: 'true' }).expect(401);
+      expect(base.options.store.markAccountInvalid).toHaveBeenCalled();
+      // The account is now invalid, so the earlier answer is gone with it.
+      await read().expect(401);
+    });
+
+    it('asks the provider again after a mutation on the same repository', async () => {
+      const changeRequestStatus = vi.fn(async () => statusFor('feature'));
+      const { app, read } = setup(changeRequestStatus);
+      await read().expect(200);
+      await request(app).post('/api/source-control/gitlab/pr/create').send(mutationBody()).expect(200);
+      await read().expect(200);
+      expect(changeRequestStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('validates pull reads before provider creation and preserves binding errors', async () => {
     const account = { id: `${origin}#9`, token: 'stored', user: { id: 9, login: 'user' }, source: 'pat', scope: '' };
     const current = { repositoryId: 'repo_one', bindingRevision: 5, binding: { status: 'bound' } };
