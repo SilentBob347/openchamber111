@@ -16,10 +16,12 @@ const url = process.env.OPENCHAMBER_GIT_CREDENTIAL_URL;
 const token = process.env.OPENCHAMBER_GIT_CREDENTIAL_TOKEN;
 if (!url || !token) silence();
 
+// The server chose this address: loopback, or the one concrete address it is
+// bound to (agent-tool/callback-address.js). Only the scheme is checked here.
 let target;
 try {
   target = new URL(url);
-  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1') silence();
+  if (target.protocol !== 'http:') silence();
 } catch {
   silence();
 }
