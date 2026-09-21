@@ -1,6 +1,6 @@
 # Isolated spaces: design
 
-Status: design agreed on 2026-09-19. [STAGES.md](STAGES.md) says what is built. Owner and reviewer: Yulia.
+Status: design agreed on 2026-09-19. [STAGES.md](STAGES.md) says what is built. Owner and reviewer: the maintainer.
 
 Read this file before working on any stage. Then read the stage you are building in [STAGES.md](STAGES.md), the rules in [TESTING.md](TESTING.md), and the facts in [LESSONS.md](LESSONS.md) when a decision looks strange. LESSONS.md explains why.
 

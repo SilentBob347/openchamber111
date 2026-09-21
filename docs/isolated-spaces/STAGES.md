@@ -4,11 +4,11 @@ Read [DESIGN.md](DESIGN.md) first.
 
 ## Delivery rules
 
-- One stage is one small pull request into `main`. Yulia reads and merges each one, so a stage must be readable in one sitting. If a stage grows, split it.
+- One stage is one small pull request into `main`. The maintainer reads and merges each one, so a stage must be readable in one sitting. If a stage grows, split it.
 - The whole feature stays behind one switch. While the switch is off, the server registers none of the feature's routes, the UI shows none of its entry points, and nothing of the feature runs at all: see decisions 17 and 18 in [DESIGN.md](DESIGN.md). The switch gates the work while it is built, and at the first release it becomes the user's opt-in in Settings rather than being removed. The stage that builds the feature's settings screens builds it.
 - Before each pull request: run the local bot review and fix its findings, run every escape test that exists so far, and complete the stage's checklist from [TESTING.md](TESTING.md).
 - A checklist line has two states: "passed, here is the evidence" or "blocked, here is the reason". There is no "skipped".
-- `yulia/dev` is an optional personal integration branch for daily use. Delivery goes through `main`.
+- A personal integration branch for daily use is optional. Delivery goes through `main`.
 - Stage 4 overlaps with the `opencode-v2-refactoring` branch (proxy, event frame format, the `translate-v2` layer). Before starting it, confirm the frame format is final and build after that layer.
 
 ## Stages
