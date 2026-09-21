@@ -64,6 +64,7 @@ import { isCapacitorMobileApp } from '@/apps/mobileNativeChrome';
 import ShellBoundaryIndicator from './parts/ShellBoundaryIndicator';
 import { getShellOperationBoundary } from './parts/shellOperationBoundary';
 import { WorktreeRequiresGitRepositoryError } from '@/lib/worktrees/worktreeCreate';
+import { cloneMessageImageExportSource } from './imageExport';
 
 
 const CONTAIN_LAYOUT_STYLE = { contain: 'layout' as const, transform: 'translateZ(0)' };
@@ -1721,7 +1722,7 @@ const AssistantMessageBody = React.memo(({
                     display: inline-block;
                 `;
 
-                const clone = originalElement.cloneNode(true) as HTMLElement;
+                const clone = cloneMessageImageExportSource(originalElement);
                 clone.style.cssText = `
                     ${computedStyle.cssText}
                     transform: none;

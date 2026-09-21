@@ -8,7 +8,7 @@ kept at this root in `types.ts` and `utils.tsx`.
   layout-owned synchronization, authoritative cleanup, and nearby-session prefetch.
 - `projects/` owns project zones, grouping, ordering, scroller behavior, project
   view state, repository state, and worktree presentation.
-- `sessions/` owns session rows, row actions, expansion, ownership, and activity indicators.
+- `sessions/` owns session rows, row actions, expansion, ownership, and activity indicators. A collapsed group or folder shows one indicator for its hidden sessions: a pending permission (shield) outranks a pending question, which outranks a running turn, which outranks unread. Pending requests are read from the cross-directory `global-blocking-requests` index, so a project never opened in this launch still shows them; running and unread come from the global status index and the notification store.
 - `recent/` owns Recent and managed Chats activity projections.
 - `folders/` owns folder DnD, bulk actions, archived folders, and folder UI.
 - `sessionSidebarRowModel.ts` owns the ordered, mode-neutral projection for
@@ -37,7 +37,8 @@ kept at this root in `types.ts` and `utils.tsx`.
   Existing destinations are never removed; they get the same guidance.
 
 `MainLayout` and `VSCodeLayout` call `useSessionListSync({ isVSCode })`
-unconditionally. The hook publishes complete directory bootstrap demand,
+unconditionally. The hook is the only bootstrap demand owner and publishes
+only the current directory and the selected session's directory; it also
 refreshes newly added topology, coalesces control events, and performs
 authoritative cleanup. Root-level `useGlobalSessionsPolling` remains the only
 initial and 45-second global poller. `useSessionListSync` must not create a
@@ -49,7 +50,8 @@ cache. Live busy and retry state comes from `global-session-status`, never from
 the global cache or persisted history. A failed global or directory fetch keeps
 existing data; it is never treated as an authoritative empty list.
 
-Web and desktop show managed Chats before optional Recent activity. Chats use
+Web and desktop show managed Chats before optional Recent activity (off by
+default since the timeline view exists; the display menu toggles it). Chats use
 their shared managed root for folders and never expose worktree actions. Project
 display can be all projects or one selected project. The mobile sessions sheet
 (`apps/MobileSessionsSheet.tsx`) partitions the same way through
@@ -76,10 +78,11 @@ that include virtual positioning but exclude sortable transforms, so settling
 animations cannot leave stale header positions. The sidebar has no separate
 desktop-only top gradient or identity overlay.
 
-Directory demand always includes known project roots and worktrees. Visibility
-only changes priority. Row mounts must not start bootstrap work. Selection and
-activity subscriptions stay session-scoped so a structural list update does not
-make every row observe unrelated streaming updates.
+Directory demand covers only the directory being worked in. Showing,
+expanding, or restoring a project never bootstraps it. Row mounts must not start
+bootstrap work. Selection and activity subscriptions stay session-scoped so a
+structural list update does not make every row observe unrelated streaming
+updates.
 
 Session menus share `SessionAiRenameMenuItem` with header tabs and the
 single-session header. AI renaming uses the same leading spinner as a worktree
@@ -91,6 +94,46 @@ Manual rename inputs share `components/session/sessionRenameKeyboard.ts` with
 the header and mobile list. Enter explicitly submits the owning form on
 keydown; Escape cancels. IME composition keys keep their text-input behavior,
 and held Enter does not submit repeatedly.
+
+Run fusion eligibility comes from `lib/multirun/identity.ts`, with title parsing
+only for unmarked legacy sessions. Row memoization compares those same semantics
+so metadata-only membership changes update the menu. See
+`lib/multirun/DOCUMENTATION.md` for source selection and fork rules.
+
+## Timeline view
+
+`sidebarViewMode` (profile-scoped, per surface) switches the desktop and web
+sidebar between `projects` and `timeline`. VS Code has no switch and always
+renders `projects`.
+
+- Timeline keeps the managed Chats zone, with an initial reveal of 3 instead of
+  the usual Chats limit. Pinned chats are always shown and never spend that
+  limit, so Show more/Show fewer count only unpinned rows. Chats rows render
+  with `renderContext: 'timeline-chat'`: one line, no left gutter, pin and
+  status dot on the right beside the time. Collapsing a zone header resets its
+  Show more state.
+- Zone headers are sticky in the projects view and never in the timeline; there
+  is no user toggle. Timeline zone headers drop the leading icon and use a
+  taller band.
+- Below Chats it renders one `timeline` activity header (a sticky zone header
+  like `chats` and `active-now`) followed by every non-archived root project
+  session from all projects and worktrees in one flat list, in the shared
+  lifecycle order, with pinned sessions floating first. There is no reveal
+  limit: the list is virtualized.
+- Timeline rows carry `renderContext: 'timeline'`, depth 0 and empty children.
+  They never expand, show no chevron, no folders, no project headers, no
+  worktree groups and no Recent projection. Folders are not projected, so the
+  row menu hides `Move to folder`. Their archive/delete actions still
+  cover the full subtree, because `collectSessionSubtreeIds` resolves
+  descendants from the global cache at action time.
+- `recent/sessionLocation.ts` is the single owner of a session's project,
+  directory, worktree and branch label. It resolves the project through the
+  session ownership index first (managed worktrees live outside the project
+  path) and falls back to a path-prefix match. Recent hides a branch equal to the
+  project label; Timeline shows the branch on every row, using the live project
+  root branch for root-directory sessions and the worktree branch otherwise.
+- Search filters Timeline with the same rule as Recent (exact `ses_` id, else
+  title contains) and counts one match per listed row.
 
 ## Search
 
@@ -120,10 +163,9 @@ matching and ordering. Search does not fetch sessions or broaden list membership
 
 ## Loading rules
 
-- Always publish every known project root and worktree directory. Collapse/visibility changes priority only; they do not opt a directory out of authoritative refresh.
-- Directory demand and refresh requests preserve path case after separator and drive-letter normalization. Layout and expanded-section demand use the same identities. Case-insensitive sidebar membership keys stay inside the collection projection; sending those keys as paths creates duplicate directory stores and can address a different directory on case-sensitive filesystems.
-- Current directory and selected-session directory are `selected` demand and therefore run first.
-- Expanded projects/worktrees outrank merely visible and background groups.
+- Publish bootstrap demand only for the current directory and the selected session's directory. Known project roots and worktrees are topology, not demand: rows and sessions come from the global session list, activity from the global status index and the host status seed. Every directory bootstrap makes OpenCode create an instance, so demanding the whole topology created one per project at startup.
+- Directory demand and refresh requests preserve path case after separator and drive-letter normalization. Case-insensitive sidebar membership keys stay inside the collection projection; sending those keys as paths creates duplicate directory stores and can address a different directory on case-sensitive filesystems.
+- A never-bootstrapped directory shows as ready. Load failures and denied folder access surface when it is selected; the group notice retry still forces a bootstrap.
 - The sync scheduler deduplicates, promotes, retries, and limits work. Sidebar components must not reproduce that lifecycle with mount effects.
 - Hide speculative work when the sidebar/chat surface is hidden: message prefetch, Git/PR enrichment and subscriptions, search listeners, sticky-header observation, and archived-folder derivation stop. The session row tree unmounts so row-owned status, permission, unseen, and viewport subscriptions do no background work. The outer sidebar remains mounted, preserving UI state and authoritative directory refresh for an immediate reopen; deferred derived work reruns from current state when visibility returns.
 - Change-request enrichment uses worktree topology only to discover at most 50 unique demanded directories in stable project order. Repository binding selects the primary provider, instance, account, revision, and primary remote; connected accounts outside that binding add no requests, and missing or `needs-attention` bindings create no provider request.
@@ -131,6 +173,13 @@ matching and ordering. Search does not fetch sessions or broaden list membership
 - The sidebar does not subscribe its whole tree to the cross-directory live-session aggregate. Global create/structural/lifecycle snapshots drive rendered session metadata; the cached sync index only fills sessions not yet present globally and provides refresh fallback data. Row activity continues to come from the session-keyed live status index.
 - Session selection does not invalidate the sidebar orchestration component. Each mounted row selects only whether its own session ID is active, while parent expansion, project selection memory, and neighbor prefetch run in small effect-only subscribers.
 - Parent expansion is exclusively manual. Selecting or navigating to a subsession never expands its parent automatically. Project/worktree and `recent` trees use independent persisted context keys and receive separate stable projections, so expansion changes in one context neither invalidate nor change the other. The persisted storage key remains `v3`; older state mixed contexts and is not migrated into this contract.
+- `SessionTreeItem` is memoized with a comparator over the props it actually
+  reads: the row list re-renders on every virtualizer frame while scrolling and
+  on every model rebuild, spreading a shared props bag and a fresh
+  `renderExtras` object onto each row, so identity comparison would never
+  match. Sessions and secondary metadata compare by value; a scroll therefore
+  renders only rows entering the viewport, and a model rebuild only rows whose
+  session changed.
 - The sidebar model flattens parent/child sessions into occurrence-keyed rows.
   `SessionTreeItem` renders one row with `renderChildren={false}`; it must never
   recursively mount descendants in the shared scroller. One preorder ID pool
@@ -159,7 +208,10 @@ matching and ordering. Search does not fetch sessions or broaden list membership
 - Rename drafts stay parent-owned, while editing and menu lifecycles are keyed
   by row occurrence. Duplicate Recent, project, and folder rows never open a
   second rename input, and the owning occurrence remains mounted through menu
-  close completion.
+  close completion. `useSessionRowMenuState` keeps the shared open-menu key
+  pinned until close completion while a local close request drives the
+  controlled `open` prop; a controlled menu whose `open` follows the pinned key
+  never closes, so its deferred rename never starts.
 - Folder drops carry occurrence drag keys and owner-scoped targets. A drop is
   accepted only when the current model marks every owner scope complete and
   the source and target owner match. Archived rows and archived targets never

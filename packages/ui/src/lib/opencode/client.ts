@@ -2,6 +2,7 @@ import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 import { createOpencodeClient, OpencodeClient } from "@opencode-ai/sdk/v2";
 import type { PermissionV2Request, PermissionV2Effect, PermissionV2Source } from "@opencode-ai/sdk/v2/client";
 import { z } from "zod";
+import { OpencodeRequestError, toUpstreamErrorDetail, upstreamErrorPayloadSchema } from "./upstreamError";
 import type { FilesAPI } from "../api/types";
 import { getDesktopHomeDirectory } from "../desktop";
 import type {
@@ -33,7 +34,7 @@ import { getRuntimeUrlResolver } from "@/lib/runtime-url";
 import { runtimeFetch } from "@/lib/runtime-fetch";
 import { getRuntimeKey } from "@/lib/runtime-switch";
 import { normalizePath } from "@/lib/pathNormalization";
-import { sessionStatusSnapshotSchema } from "./session-status";
+import { hostSessionStatusSnapshotSchema, sessionStatusSnapshotSchema, type HostSessionStatusSnapshot } from "./session-status";
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry";
 import { markStartupTrace } from "@/lib/startupTrace";
 import {
@@ -79,9 +80,10 @@ const directoryProbeErrorSchema = z.object({ reason: z.string().optional(), isDi
 function unwrapSdkData<T>(result: SdkResult<T>, operation: string): T {
   if (result.error) {
     const status = result.response?.status;
-    const error = new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`) as Error & { status?: number };
-    if (status !== undefined) error.status = status;
-    throw error;
+    throw new OpencodeRequestError(
+      `${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`,
+      toUpstreamErrorDetail(upstreamErrorPayloadSchema.safeParse(result.error).data, status),
+    );
   }
   if (result.data === undefined || result.data === null) {
     throw new Error(`${operation} failed: empty response`);
@@ -92,9 +94,10 @@ function unwrapSdkData<T>(result: SdkResult<T>, operation: string): T {
 function unwrapSdkOptional<T>(result: SdkResult<T>, operation: string): T | undefined {
   if (result.error) {
     const status = result.response?.status;
-    const error = new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`) as Error & { status?: number };
-    if (status !== undefined) error.status = status;
-    throw error;
+    throw new OpencodeRequestError(
+      `${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`,
+      toUpstreamErrorDetail(upstreamErrorPayloadSchema.safeParse(result.error).data, status),
+    );
   }
   return result.data;
 }
@@ -349,7 +352,12 @@ const getDesktopFilesApi = (): FilesAPI | null => {
 // /api/fs/home parsing boundary. Older servers answer without chatsRoot;
 // only a valid home response may use the legacy chats-root fallback.
 const fsAbsolutePathSchema = z.string().trim().regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/);
-const fsHomeResponseSchema = z.object({ home: fsAbsolutePathSchema, chatsRoot: fsAbsolutePathSchema.optional() });
+const fsHomeResponseSchema = z.object({
+  home: fsAbsolutePathSchema,
+  chatsRoot: fsAbsolutePathSchema.optional(),
+  canonicalChatsRoot: fsAbsolutePathSchema.optional(),
+  canonicalLegacyChatsRoot: fsAbsolutePathSchema.optional(),
+});
 
 class OpencodeService {
   private client: OpencodeClient;
@@ -1181,6 +1189,28 @@ class OpencodeService {
     Record<string, { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; next?: number }>
   > {
     return (await this.getSessionStatusForDirectory(null)) ?? {};
+  }
+
+  /**
+   * Cross-project busy/retry/idle map kept by the OpenChamber host from the
+   * single upstream event stream. One request that creates no OpenCode
+   * instance, unlike `/session/status?directory=`. `null` means the fetch
+   * failed; callers must preserve their current state.
+   */
+  async getHostSessionStatusSnapshot(): Promise<HostSessionStatusSnapshot | null> {
+    try {
+      const response = await runtimeFetch('/api/sessions/status', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const parsed = hostSessionStatusSnapshotSchema.safeParse(await response.json().catch(() => null));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

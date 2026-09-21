@@ -220,7 +220,11 @@ const isLegacyDefaultTemplates = (value: unknown): boolean => {
 
 const CONTEXT_PANEL_DEFAULT_WIDTH = 380;
 const CONTEXT_PANEL_MIN_WIDTH = 320;
-const CONTEXT_PANEL_MAX_WIDTH = 1400;
+/** Persistence sanity bound only: the real ceiling is responsive
+ * (widthFractionByMode, capped by available area minus a minimum chat
+ * width in ContextPanel), so a wide monitor may legitimately store a
+ * width far beyond any fixed pixel value. */
+const CONTEXT_PANEL_MAX_PERSISTED_WIDTH = 10000;
 /** Per surface, not per panel: see clampContextPanelTabs. */
 const CONTEXT_PANEL_MAX_TABS = 12;
 const CONTEXT_PANEL_MAX_LABEL_LENGTH = 120;
@@ -255,7 +259,7 @@ const clampContextPanelWidth = (width: number): number => {
     return CONTEXT_PANEL_DEFAULT_WIDTH;
   }
 
-  return Math.min(CONTEXT_PANEL_MAX_WIDTH, Math.max(CONTEXT_PANEL_MIN_WIDTH, Math.round(width)));
+  return Math.min(CONTEXT_PANEL_MAX_PERSISTED_WIDTH, Math.max(CONTEXT_PANEL_MIN_WIDTH, Math.round(width)));
 };
 
 const normalizeContextTargetPath = (value: string | null | undefined): string | null => {
@@ -975,6 +979,8 @@ interface UIStore {
   agentGitAuthorityEnabled: boolean;
   agentControlToolEnabled: boolean;
   agentWebToolEnabled: boolean;
+  /** Who answers the agent's browser actions: `builtin` (the in-app view) or an extension id. */
+  browserProvider: string;
   agentMemoryToolEnabled: boolean;
   /**
    * Whether this build has agent memory at all. Server-owned and not
@@ -1184,6 +1190,7 @@ interface UIStore {
   setAgentGitAuthorityEnabled: (value: boolean) => void;
   setAgentControlToolEnabled: (value: boolean) => void;
   setAgentWebToolEnabled: (value: boolean) => void;
+  setBrowserProvider: (value: string) => void;
   setAgentMemoryToolEnabled: (value: boolean) => void;
   setAgentMemoryFeatureAvailable: (value: boolean) => void;
   setRoutingFeatureAvailable: (value: boolean) => void;
@@ -1364,6 +1371,7 @@ export const useUIStore = create<UIStore>()(
         agentGitAuthorityEnabled: true,
         agentControlToolEnabled: true,
         agentWebToolEnabled: true,
+        browserProvider: 'builtin',
         agentMemoryToolEnabled: false,
         agentMemoryFeatureAvailable: false,
         routingFeatureAvailable: false,
@@ -2690,6 +2698,9 @@ export const useUIStore = create<UIStore>()(
         setAgentWebToolEnabled: (value) => {
           set({ agentWebToolEnabled: value });
         },
+        setBrowserProvider: (value) => {
+          set({ browserProvider: value });
+        },
         setAgentMemoryToolEnabled: (value) => {
           set({ agentMemoryToolEnabled: value });
         },
@@ -3163,6 +3174,7 @@ export const useUIStore = create<UIStore>()(
           agentGitAuthorityEnabled: state.agentGitAuthorityEnabled,
           agentControlToolEnabled: state.agentControlToolEnabled,
           agentWebToolEnabled: state.agentWebToolEnabled,
+          browserProvider: state.browserProvider,
           agentMemoryToolEnabled: state.agentMemoryToolEnabled,
           agentMemoryViewedAt: state.agentMemoryViewedAt,
           projectContextSidebarWidth: state.projectContextSidebarWidth,

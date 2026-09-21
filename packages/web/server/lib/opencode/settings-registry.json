@@ -126,6 +126,9 @@
     "agentWebToolEnabled": {
       "scope": "instance"
     },
+    "browserProvider": {
+      "scope": "instance"
+    },
     "agentMemoryToolEnabled": {
       "scope": "instance"
     },
@@ -218,8 +221,9 @@
     "sidebarProjectDisplayMode": {
       "scope": "profile"
     },
-    "sidebarSessionGroupingMode": {
-      "scope": "profile"
+    "sidebarViewMode": {
+      "scope": "profile",
+      "perSurface": true
     },
     "sidebarProjectSortOrder": {
       "scope": "profile"
