@@ -461,11 +461,11 @@ Stage 2 ran on three machines on 2026-09-21, the staged files hashed against the
 
 | Machine | Engine | Result |
 |---|---|---|
-| macOS 26, Colima, linux/arm64 | 29.2.1 | Unit 693 passed, 83 skipped. Live 772 passed, 4 skipped of 776, 147 s. No leftover container, network or volume |
-| Debian 13, linux/amd64, over `DOCKER_HOST=ssh://` | 29.8.1 | 772 passed, 4 skipped of 776, 1,159 s. No leftovers. The first amd64 run of the corridor |
-| Windows 11, Docker Desktop, the module on the Windows host | 29.6.2 | 759 passed, 17 skipped of 776, 302 s, exit 0. No leftovers |
+| macOS 26, Colima, linux/arm64 | 29.2.1 | Unit 695 passed, 83 skipped. Live 774 passed, 4 skipped of 778, 113 s. No leftover container, network or volume |
+| Debian 13, linux/amd64, over `DOCKER_HOST=ssh://` | 29.8.1 | 774 passed, 4 skipped of 778, 783 s. No leftovers. The first amd64 run of the corridor |
+| Windows 11, Docker Desktop, the module on the Windows host | 29.6.2 | 761 passed, 17 skipped of 778, 311 s, exit 0. No leftovers. Files ran in parallel, as they do by default, beside the three live Docker files |
 
-The 13 tests between the Windows number and the other two are the `tools-filler` group that stage 1b switches off on `win32`: 772 − 759 = 13 and 17 − 4 = 13, so the smaller number is the same run and not a partial one.
+The 13 tests between the Windows number and the other two are the `tools-filler` group that stage 1b switches off on `win32`: 774 − 761 = 13 and 17 − 4 = 13, so the smaller number is the same run and not a partial one.
 
 The vitest worker that ran `gatekeeper-program.test.js` used to die on Windows. It does not any more: that file ran to completion there and every one of the seven tests that had failed on a clock reading passed on a record count.
 
