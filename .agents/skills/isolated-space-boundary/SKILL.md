@@ -46,8 +46,8 @@ Choose the test level where the failure can occur. Container and network guarant
 For a new or changed protection, or an escape test whose assertion or setup changes:
 
 1. Make the regression discriminate. It must fail on the defective behavior and pass with the protection. A refusal caused by a missing tool, failed DNS or an offline upstream is not proof; establish the applicable positive control.
-2. Check test sensitivity with the original defect or a targeted mutation in a disposable copy. Confirm the failure is the promised violation, not a setup error. If an independent protection still blocks the attempt, identify it and isolate the changed layer's test. A surviving defense is not itself a test defect.
-3. Record the tested change, control, result and any blocked verification in the validation evidence. Update owning documentation when the guarantee, mechanism or known limit changes. Keep transient run history in the task or PR evidence.
+2. Prove it by removing it. In a disposable copy, remove the protection or restore the original defect, run the test that claims to prove it, and watch it go red. The run is the evidence: a mutation you describe and do not run proves nothing. Confirm it fails for the promised violation, not a setup error. If an independent protection still blocks the attempt, identify it and isolate the changed layer's test. A surviving defense is not itself a test defect.
+3. Restore the protection, run the test again, and watch it go green. Record the mutation, control, result and any blocked verification in the validation evidence. Update owning documentation when the guarantee, mechanism or known limit changes. Keep transient run history in the task or PR evidence.
 
 For a behavior-preserving refactor, establish the existing behavior and rerun the affected regression tests. Add a sensitivity check when the refactor changes what those tests exercise or exposes a gap in their proof.
 
