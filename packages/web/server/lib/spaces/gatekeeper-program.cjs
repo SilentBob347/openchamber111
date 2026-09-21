@@ -25,7 +25,20 @@ const https = require('node:https');
 const net = require('node:net');
 const os = require('node:os');
 
-const [bindHost, corridorPort, windowPort, controlPort, windowDeadline] = process.argv.slice(2);
+const [bindHost, corridorPort, windowPort, controlPort, windowDeadline, corridorCap, windowCap, controlCap] = process.argv.slice(2);
+
+/**
+ * A cap given on the command line, or the production number when there is none.
+ *
+ * The caps are arguments for the same reason the window's deadline is: they are lengths, not
+ * decisions, and a test that has to exceed one needs it small. A drop only happens when more
+ * connections are *accepted* than the cap allows, and a busy machine accepts slowly while the
+ * kernel's backlog keeps taking handshakes — so a flood of 300 clients against a cap of 128 can
+ * leave every one of them connected and nothing accepted past the cap, and the flood goes
+ * unrecorded. At a cap of 4 that cannot happen. The container command carries the production
+ * numbers and the hardening test asserts the command, so nothing here can raise them.
+ */
+const cap = (given, production) => (Number.isInteger(Number(given)) && Number(given) > 0 ? Number(given) : production);
 const CONTROL_HOST = '127.0.0.1';
 
 // 443 and nothing else, in both modes, for two reasons.
@@ -52,10 +65,10 @@ const MAX_TUNNELS = 64;
 // MAX_TUNNELS counts only what is established. Twice the tunnel cap leaves room for every
 // handshake a working space makes and still refuses a flood, which the space can otherwise use
 // to have this process killed and the journal of what it tried killed with it.
-const MAX_CORRIDOR_CONNECTIONS = 2 * MAX_TUNNELS;
+const MAX_CORRIDOR_CONNECTIONS = cap(corridorCap, 2 * MAX_TUNNELS);
 // The window serves one request per connection at a time, and each one holds a socket out.
 // The same number in and out, so the outgoing side can never grow past the incoming one.
-const MAX_WINDOW_CONNECTIONS = 64;
+const MAX_WINDOW_CONNECTIONS = cap(windowCap, 64);
 // No byte from the upstream for this long and the request is over. The same number as a tunnel's
 // idle limit and for the same reason: a model answer streams, so what matters is silence, not
 // how long the whole answer takes. Without it an upstream that accepts and never answers holds
@@ -64,7 +77,7 @@ const MAX_WINDOW_CONNECTIONS = 64;
 // going quiet rather than about the agent.
 const WINDOW_IDLE_MS = Number(windowDeadline) > 0 ? Number(windowDeadline) : 300_000;
 // Only the host talks to the control channel, one request at a time.
-const MAX_CONTROL_CONNECTIONS = 8;
+const MAX_CONTROL_CONNECTIONS = cap(controlCap, 8);
 // Traffic that never reached a decision is journalled at most this often, per listener and per
 // kind. The flood is the point of the record, and 500 records of it would erase everything else.
 const NOTE_INTERVAL_MS = 60_000;
@@ -548,17 +561,22 @@ const WINDOW_PATH = /^\/model\/([A-Za-z0-9._-]{1,64})([/?][^]*)?$/;
  * decodes before it resolves reads `%2e%2e`, `.%2e`, `..%2f`, `..%5c` and `..;` as the same
  * climb. Refusing every rest carrying a `%` would be simpler and would be wrong, because a
  * scoped npm package is fetched as `/@scope%2fname` and that window is half the reason this
- * rule exists. So the rest is decoded, up to three rounds for a doubly encoded form, and each
- * round is split on every separator a server might honour before `..` is compared. A rest that
- * will not decode is refused: nothing legitimate sends a `%` that is not an escape, and the
- * alternative is guessing which of two readings the upstream will take.
+ * rule exists. So the rest is decoded until decoding changes nothing, and each round is split on
+ * every separator a server might honour before `..` is compared. A rest that will not decode is
+ * refused: nothing legitimate sends a `%` that is not an escape, and the alternative is guessing
+ * which of two readings the upstream will take.
+ *
+ * Decoding to a fixed point rather than a fixed number of rounds, because a bound on the rounds
+ * is a hole at the round after it: at three, a four-times-encoded `..` went through verbatim.
+ * The loop ends on its own — every round that changes anything replaces at least one three-byte
+ * escape with one byte, so the rest strictly shortens until a round decodes to itself.
  *
  * Not an escape today — a grant's upstream and its key belong together — and a trap left armed
  * for the stage that puts git and a private registry behind the same window.
  */
 function walksOutOfGrant(rest) {
   let form = String(rest ?? '');
-  for (let round = 0; round < 3; round += 1) {
+  for (;;) {
     if (form.split(/[/\\;?#]/).includes('..')) return true;
     if (!form.includes('%')) return false;
     let decoded;
@@ -570,7 +588,6 @@ function walksOutOfGrant(rest) {
     if (decoded === form) return false;
     form = decoded;
   }
-  return form.split(/[/\\;?#]/).includes('..');
 }
 
 // The window's own sockets out, capped the same way its sockets in are. Requests past the cap

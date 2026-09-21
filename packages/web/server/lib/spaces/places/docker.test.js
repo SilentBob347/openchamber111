@@ -272,7 +272,7 @@ describe('docker place: create', () => {
       '--env', 'HOME=/tmp',
       SPACE_BASE_IMAGE,
       '/bin/sh', '-c',
-      'while [ ! -s /tmp/openchamber-gatekeeper/gatekeeper.cjs ]; do /bin/sleep 0.2; done; exec /usr/local/bin/node /tmp/openchamber-gatekeeper/gatekeeper.cjs 0.0.0.0 3128 8080 9099 300000',
+      'while [ ! -s /tmp/openchamber-gatekeeper/gatekeeper.cjs ]; do /bin/sleep 0.2; done; exec /usr/local/bin/node /tmp/openchamber-gatekeeper/gatekeeper.cjs 0.0.0.0 3128 8080 9099 300000 128 64 8',
     ]);
     expect(create).toContain('openchamber.space.role=gatekeeper');
     expect(create).not.toContain('--mount');

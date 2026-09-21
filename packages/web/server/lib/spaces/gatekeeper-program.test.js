@@ -21,6 +21,19 @@ const SECRET = 'sk-the-real-key-the-space-never-sees';
 // without any connection ever being made.
 const PUBLIC_ADDRESS = '203.0.113.7';
 
+/**
+ * The connection caps this gatekeeper runs with. Small, because a test has to exceed one, and a
+ * drop only happens when a connection is *accepted* past the cap: a loaded machine accepts slowly
+ * while the kernel's backlog keeps completing handshakes, so a flood of 300 clients against the
+ * production cap of 128 can leave every client connected, nothing accepted past the cap, and the
+ * flood unrecorded. Measured that way with the program stopped: 128 connected, no note, ever.
+ *
+ * The corridor's stays above the 16 refused clients the program waits on at once, or a refusal
+ * would fill this cap and the test above it would be testing the wrong thing. The production
+ * numbers, 128, 64 and 8, are in the container command, which `docker.test.js` asserts whole.
+ */
+const CAPS = { corridor: 24, window: 8, control: 8 };
+
 /** An address of this machine that is not loopback, as a container's own address is not. */
 const ownAddress = () => Object.values(os.networkInterfaces())
   .flat()
@@ -116,6 +129,23 @@ describe('gatekeeper program', () => {
     return records.slice(Math.max(0, records.length - since));
   };
 
+  /** Every note of this kind written since the mark, whatever listener made it. */
+  const notesSince = async (decision, mark) => (await recordsSince(mark)).filter((entry) => entry.decision === decision);
+
+  /**
+   * A note of this kind from this listener, written since the mark. Waited for, like every other
+   * record this file reads: a flood is noted when the program drops a connection, which is not
+   * the moment the client's socket reported itself connected.
+   */
+  const noteFor = async (listener, decision, mark) => {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const found = (await notesSince(decision, mark)).filter((entry) => entry.listener === listener);
+      if (found.length > 0) return found.at(-1);
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+    }
+    throw new Error(`the gatekeeper never noted ${decision} on the ${listener} after its record ${mark}`);
+  };
+
   const decisionFor = async (host, mark = 0) => {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const fresh = (await recordsSince(mark)).filter((entry) => entry.host === host);
@@ -194,7 +224,7 @@ describe('gatekeeper program', () => {
 
     // The last argument is the window's deadline: 1.5 seconds here so a test can watch it
     // pass, 300000 in the container command, which the hardening test asserts.
-    child = spawn(process.execPath, [PROGRAM, '127.0.0.1', String(ports.corridor), String(ports.window), String(ports.control), '1500'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, [PROGRAM, '127.0.0.1', String(ports.corridor), String(ports.window), String(ports.control), '1500', String(CAPS.corridor), String(CAPS.window), String(CAPS.control)], { stdio: ['ignore', 'pipe', 'pipe'] });
     // Both pipes are read, always. A full stderr pipe blocks the child, and the program writes
     // there whenever it keeps running after an error, which the flood tests provoke.
     const keep = (chunk) => { childOutput = `${childOutput}${chunk}`.slice(-4_000); };
@@ -355,11 +385,14 @@ describe('gatekeeper program', () => {
     });
 
     it('records that the parser threw something out, so probing with such targets is not invisible', async () => {
-      // Rate-limited to once a minute per listener, which is why this is one test and not three.
-      const before = (await journal()).records.filter((entry) => entry.decision === 'deny:unreadable-request').length;
       await tunnelTo('auth.openai.com\u3002:443');
-      const after = (await journal()).records.filter((entry) => entry.decision === 'deny:unreadable-request').length;
-      expect(after).toBeGreaterThanOrEqual(Math.max(before, 1));
+      // Waited for, not read once: the program journals when it decides. The note is not asked to
+      // be this attempt's own, because notes are rate-limited to one a minute per listener and
+      // per kind, and an earlier malformed line in this file may already have spent the minute.
+      // That is the limiter working, and it is why this is one test and not three. What this
+      // proves is that the parser's refusals reach the journal at all, so a space cannot probe
+      // with targets the parser throws out and leave the user's view blind by construction.
+      expect(await noteFor('corridor', 'deny:unreadable-request', 0)).toMatchObject({ host: '', port: 0 });
     });
 
     it('refuses auth.openai.com, whatever the mode and whatever the list says', async () => {
@@ -448,11 +481,14 @@ describe('gatekeeper program', () => {
     // corridor answered nothing, with nothing open anywhere.
     it('lets a refused socket go, so refusals cannot fill the connection cap', async () => {
       // One at a time, and each client keeps its socket after reading the refusal. With the
-      // socket released at our end, all 140 are answered however long the clients hold on.
-      // Without it the cap fills at 128 and everything after that is dropped, corridor included.
+      // socket released at our end, every one of them is answered however long the clients hold
+      // on. Without it the cap fills — 128 in the container, 24 here — and everything after that
+      // is dropped, the corridor with it. Several times the cap, so the count means something at
+      // either number, and the program waits on at most 16 refused clients at once by design.
+      const attempts = CAPS.corridor * 6;
       const kept = [];
       const outcomes = [];
-      for (let attempt = 0; attempt < 140; attempt += 1) {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
         outcomes.push(await new Promise((resolve) => {
           // `allowHalfOpen`, so reading the refusal does not make this client close by itself.
           const socket = track(net.connect({ host: '127.0.0.1', port: ports.corridor, allowHalfOpen: true }));
@@ -463,7 +499,7 @@ describe('gatekeeper program', () => {
           setTimeout(() => resolve('no answer'), 5_000);
         }));
       }
-      expect(outcomes.filter((outcome) => outcome === 'refused')).toHaveLength(140);
+      expect(outcomes.filter((outcome) => outcome === 'refused')).toHaveLength(attempts);
 
       // And the corridor is still there, with nothing of its own held open.
       expect((await tunnelTo('blocked.test:443')).status).toMatch(/403/);
@@ -528,16 +564,25 @@ describe('gatekeeper program', () => {
     }, 30_000);
 
     it('caps the sockets the space can hold on the corridor, and lives through a flood', async () => {
-      const sockets = await hold(ports.corridor, 300);
-      // Above the corridor's cap of 128, or the flood is not a flood and this test says nothing.
-      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(128);
+      // Twice the cap, and every one of them held. The old shape of this test opened 300 against
+      // the production cap of 128 and then read the journal once, which made its verdict depend
+      // on how fast the machine accepted: a drop happens when a connection is accepted past the
+      // cap, and a loaded machine leaves them in the kernel's backlog instead, connected and
+      // never accepted. It passed on three machines and failed on CI, where the whole repository
+      // runs in parallel. At twice a cap of 24 there is nothing to be slow about.
+      const mark = await journalMark();
+      const sockets = await hold(ports.corridor, CAPS.corridor * 2);
+      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.corridor);
       try {
         // The process is alive, and the journal, which lives in its memory, is still readable.
         expect(child.exitCode).toBe(null);
         expect((await control('GET', '/health')).status).toBe(200);
-        const notes = (await journal()).records.filter((entry) => entry.decision === 'deny:too-many-connections');
-        // Recorded, and recorded once: five hundred notes would erase everything else the space did.
-        expect(notes.map((note) => note.listener)).toEqual(['corridor']);
+        // The note is the evidence that connections were refused, and it is waited for, like
+        // every other record this file asserts: the program journals when it decides, not when
+        // the client hears about it.
+        expect(await noteFor('corridor', 'deny:too-many-connections', mark)).toMatchObject({ host: '', port: 0 });
+        // Recorded once: five hundred notes would erase everything else the space did.
+        expect(await notesSince('deny:too-many-connections', mark)).toHaveLength(1);
       } finally {
         await release(sockets);
       }
@@ -546,14 +591,14 @@ describe('gatekeeper program', () => {
     }, 60_000);
 
     it('caps the sockets on the window too, and keeps serving the rest', async () => {
-      const sockets = await hold(ports.window, 200);
-      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(64);
+      const mark = await journalMark();
+      const sockets = await hold(ports.window, CAPS.window * 3);
+      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.window);
       try {
         expect(child.exitCode).toBe(null);
         // The corridor is not the window: a flood on one does not take the other.
         expect((await tunnelTo('blocked.test:443')).status).toMatch(/403/);
-        const listeners = (await journal()).records.filter((entry) => entry.decision === 'deny:too-many-connections').map((entry) => entry.listener);
-        expect(listeners).toContain('window');
+        expect(await noteFor('window', 'deny:too-many-connections', mark)).toMatchObject({ listener: 'window' });
       } finally {
         await release(sockets);
       }
@@ -561,15 +606,18 @@ describe('gatekeeper program', () => {
     }, 60_000);
 
     it('caps the sockets on the control channel, and answers again afterwards', async () => {
-      const sockets = await hold(ports.control, 100);
-      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(8);
+      const mark = await journalMark();
+      const sockets = await hold(ports.control, CAPS.control * 3);
+      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.control);
       try {
         expect(child.exitCode).toBe(null);
         expect((await tunnelTo('blocked.test:443')).status).toMatch(/403/);
       } finally {
         await release(sockets);
       }
+      // Read after the flood lets go, because reading it during one needs the channel it floods.
       expect((await control('GET', '/health')).status).toBe(200);
+      expect(await noteFor('control', 'deny:too-many-connections', mark)).toMatchObject({ listener: 'control' });
     }, 60_000);
 
     it('is still healthy afterwards', async () => {
@@ -638,6 +686,7 @@ describe('gatekeeper program', () => {
       // measured reaching the upstream when this rule only looked for a literal `..`.
       const climbs = [
         '/model/anthropic/../admin',
+        '/model/anthropic/%25252e%25252e/admin',
         '/model/anthropic/%2e%2e/admin',
         '/model/anthropic/..%2fadmin',
         '/model/anthropic/.%2e/admin',
@@ -1167,6 +1216,8 @@ describe('the rules of the gatekeeper program', () => {
       ['a backslash separator, encoded', '/x/..%5cadmin'],
       ['a path parameter after the dots', '/..;/admin'],
       ['encoded twice', '/%252e%252e/admin'],
+      ['encoded four times', '/%25252e%25252e/admin'],
+      ['encoded five times', '/%2525252e%2525252e/admin'],
       ['dots and separator both encoded', '/%2e%2e%2fadmin'],
       ['a climb at the very end', '/v1/..'],
       ['a climb before the query', '/v1/..?x=1'],

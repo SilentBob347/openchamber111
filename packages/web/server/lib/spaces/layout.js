@@ -115,9 +115,17 @@ export const GATEKEEPER_ENVIRONMENT = Object.freeze({ HOME: '/tmp' });
 // tunnel idle limit, and for the same reason: a model answer streams, so silence is what counts.
 const GATEKEEPER_WINDOW_DEADLINE_MS = 300_000;
 
+// How many connections each listener holds at once. The corridor's is twice the tunnel cap, so
+// every handshake a working space makes has room; the window serves one request per connection
+// and holds a socket out for each; only the host talks to the control channel.
+const GATEKEEPER_CORRIDOR_CONNECTIONS = 128;
+const GATEKEEPER_WINDOW_CONNECTIONS = 64;
+const GATEKEEPER_CONTROL_CONNECTIONS = 8;
+
 // The same shape as the space's wait for its token: the container comes up, waits for the file
-// the host sends over `exec`, and becomes the program. The ports and the deadline are arguments,
-// so the one program serves the container and the tests without a switch that weakens it.
+// the host sends over `exec`, and becomes the program. The ports, the deadline and the caps are
+// arguments, so the one program serves the container and the tests without a switch that weakens
+// it. These numbers are the production ones and the hardening test asserts this whole command.
 const GATEKEEPER_SCRIPT = [
   `while [ ! -s ${GATEKEEPER_PROGRAM_PATH} ]; do ${IMAGE_SLEEP} 0.2; done;`,
   `exec ${IMAGE_NODE} ${GATEKEEPER_PROGRAM_PATH}`,
@@ -126,6 +134,9 @@ const GATEKEEPER_SCRIPT = [
   String(GATEKEEPER_WINDOW_PORT),
   String(GATEKEEPER_CONTROL_PORT),
   String(GATEKEEPER_WINDOW_DEADLINE_MS),
+  String(GATEKEEPER_CORRIDOR_CONNECTIONS),
+  String(GATEKEEPER_WINDOW_CONNECTIONS),
+  String(GATEKEEPER_CONTROL_CONNECTIONS),
 ].join(' ');
 
 /** The command of a gatekeeper container. Fixed, and the same for every space. */
