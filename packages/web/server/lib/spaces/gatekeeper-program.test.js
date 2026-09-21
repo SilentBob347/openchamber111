@@ -471,21 +471,6 @@ describe('gatekeeper program', () => {
     // The tunnel cap itself needs 64 tunnels that were allowed, which needs names that resolve
     // to public addresses. The escape suite does that inside a space with a real allowed domain.
     // What is tested here is the cap that holds when nothing is allowed at all: sockets.
-    /** Opens `count` sockets and keeps them. Resolves the sockets that really connected. */
-    const hold = (port, count) => Promise.all(Array.from({ length: count }, () => new Promise((resolve) => {
-      // Each one connects and then says nothing, so every socket sits in the header window.
-      const socket = track(net.connect({ host: '127.0.0.1', port }));
-      socket.on('error', () => resolve(socket));
-      socket.on('connect', () => resolve(socket));
-      socket.on('close', () => resolve(socket));
-      // A connection the listener's backlog is holding may do none of the three for a long time,
-      // and a promise that never settles is a hook that never returns and a worker that dies.
-      setTimeout(() => resolve(socket), 10_000);
-    })));
-    const release = async (sockets) => {
-      for (const socket of sockets) socket.destroy();
-      await new Promise((resolve) => { setTimeout(resolve, 500); });
-    };
 
     // The cap only bounds what it can see. A refused client used to keep its socket for as long
     // as it liked: the socket allows half-open, the request timeouts stop applying once a CONNECT
@@ -576,62 +561,150 @@ describe('gatekeeper program', () => {
       expect(slow.endsWith('\r\n\r\n')).toBe(true);
     }, 30_000);
 
-    it('caps the sockets the space can hold on the corridor, and lives through a flood', async () => {
-      // Twice the cap, and every one of them held. The old shape of this test opened 300 against
-      // the production cap of 128 and then read the journal once, which made its verdict depend
-      // on how fast the machine accepted: a drop happens when a connection is accepted past the
-      // cap, and a loaded machine leaves them in the kernel's backlog instead, connected and
-      // never accepted. It passed on three machines and failed on CI, where the whole repository
-      // runs in parallel. At twice a cap of 20 there is nothing to be slow about.
-      const mark = await journalMark();
-      const sockets = await hold(ports.corridor, CAPS.corridor * 2);
-      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.corridor);
-      try {
-        // The process is alive, and the journal, which lives in its memory, is still readable.
-        expect(child.exitCode).toBe(null);
-        expect((await control('GET', '/health')).status).toBe(200);
-        // The note is the evidence that connections were refused, and it is waited for, like
-        // every other record this file asserts: the program journals when it decides, not when
-        // the client hears about it.
-        expect(await noteFor('corridor', 'deny:too-many-connections', mark)).toMatchObject({ host: '', port: 0 });
-        // Recorded once: five hundred notes would erase everything else the space did.
-        expect(await notesSince('deny:too-many-connections', mark)).toHaveLength(1);
-      } finally {
-        await release(sockets);
-      }
-      // And the corridor serves again once the flood lets go.
-      expect((await tunnelTo('blocked.test:443')).status).toMatch(/403/);
-    }, 60_000);
+    // A cap is not exceeded by opening sockets quickly. A connection is dropped when it is
+    // *accepted* past the cap, and accepting is the server's turn on the CPU: on a busy machine
+    // the kernel's backlog keeps completing handshakes while the process is not scheduled, so
+    // every client can be connected with nothing accepted past the cap and nothing to record.
+    // Measured with the program stopped while 300 clients connected: 128 connected, no note,
+    // ever, and no amount of waiting would have produced one. That is what failed in CI and then
+    // on Windows beside the live Docker files, and lowering the cap did not fix it, because the
+    // problem was never how many sockets the client opens.
+    //
+    // So these tests climb to the cap instead of flooding it, and every rung is *proven* accepted
+    // before the next one opens: a listener only answers a connection it has accepted. Once the
+    // cap is full of proven connections, the next one can only be dropped, whatever else the
+    // machine is doing. A second gatekeeper runs with a cap of 2 on every listener, so a whole
+    // test costs five sockets instead of forty; the first one keeps a corridor cap above the 16
+    // refused clients the program waits on at once, which is what the test above it needs.
+    describe('at a cap it cannot exceed', () => {
+      let small;
+      let smallPorts;
 
-    it('caps the sockets on the window too, and keeps serving the rest', async () => {
-      const mark = await journalMark();
-      const sockets = await hold(ports.window, CAPS.window * 3);
-      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.window);
-      try {
-        expect(child.exitCode).toBe(null);
-        // The corridor is not the window: a flood on one does not take the other.
-        expect((await tunnelTo('blocked.test:443')).status).toMatch(/403/);
-        expect(await noteFor('window', 'deny:too-many-connections', mark)).toMatchObject({ listener: 'window' });
-      } finally {
-        await release(sockets);
-      }
-      expect((await throughWindow('/model/nothing/here')).status).toBe(403);
-    }, 60_000);
+      /** One request, on a connection of its own, closed by its answer. Never keeps a slot. */
+      const ask = (port, path) => new Promise((resolve) => {
+        const request = track(http.request({ host: '127.0.0.1', port, path, agent: false }, (answer) => {
+          let text = '';
+          answer.on('data', (chunk) => { text += chunk; });
+          answer.on('end', () => resolve({ status: answer.statusCode, body: text }));
+        }));
+        request.on('error', () => resolve({ status: 0, body: '' }));
+        request.end();
+      });
 
-    it('caps the sockets on the control channel, and answers again afterwards', async () => {
-      const mark = await journalMark();
-      const sockets = await hold(ports.control, CAPS.control * 3);
-      expect(sockets.filter((socket) => !socket.destroyed && socket.remoteAddress).length).toBeGreaterThan(CAPS.control);
-      try {
-        expect(child.exitCode).toBe(null);
-        expect((await tunnelTo('blocked.test:443')).status).toMatch(/403/);
-      } finally {
-        await release(sockets);
-      }
-      // Read after the flood lets go, because reading it during one needs the channel it floods.
-      expect((await control('GET', '/health')).status).toBe(200);
-      expect(await noteFor('control', 'deny:too-many-connections', mark)).toMatchObject({ listener: 'control' });
-    }, 60_000);
+      const smallNotes = async (listener) => {
+        const body = (await ask(smallPorts.control, '/journal')).body || '{"records":[]}';
+        return JSON.parse(body).records.filter((entry) => entry.decision === 'deny:too-many-connections' && entry.listener === listener);
+      };
+
+      /**
+       * A connection that has been accepted, proven by the listener answering on it, and then
+       * kept. What comes back does not matter, only that it came: nothing is answered on a
+       * connection that was never accepted.
+       */
+      const accepted = (port, line) => new Promise((resolve, reject) => {
+        // `allowHalfOpen`, or the corridor's rungs do not hold: a refusal ends the gatekeeper's
+        // side of the socket, and a client without it ends its own side in answer and the
+        // connection is gone. Measured: two refusals left nothing behind and nothing was dropped.
+        const socket = track(net.connect({ host: '127.0.0.1', port, allowHalfOpen: true }));
+        socket.on('error', reject);
+        socket.on('connect', () => socket.write(line));
+        socket.on('data', () => resolve(socket));
+        setTimeout(() => reject(new Error(`nothing answered on port ${port}`)), 10_000);
+      });
+
+      /**
+       * A connection the listener drops: closed without a byte on it, because the cap was full of
+       * connections this test had already watched being answered. The close is the observable,
+       * and the note is written before it, so nothing here waits on a schedule.
+       */
+      const dropped = (port) => new Promise((resolve, reject) => {
+        const socket = track(net.connect({ host: '127.0.0.1', port }));
+        let answered = false;
+        socket.on('data', () => { answered = true; });
+        socket.on('error', () => resolve('closed'));
+        socket.on('close', () => resolve(answered ? 'answered' : 'closed'));
+        setTimeout(() => reject(new Error(`the listener on port ${port} neither answered nor let go`)), 10_000);
+      });
+
+      const settle = () => new Promise((resolve) => { setTimeout(resolve, 200); });
+
+      beforeAll(async () => {
+        smallPorts = { corridor: await freePort(), window: await freePort(), control: await freePort() };
+        small = spawn(process.execPath, [PROGRAM, '127.0.0.1', String(smallPorts.corridor), String(smallPorts.window), String(smallPorts.control), '1500', '2', '2', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        small.stdout.resume();
+        small.stderr.resume();
+        const ready = Date.now();
+        while (Date.now() - ready < 20_000) {
+          if ((await ask(smallPorts.control, '/health')).status === 200) return;
+          await settle();
+        }
+        throw new Error('the second gatekeeper never became ready');
+      }, 30_000);
+
+      afterAll(async () => {
+        if (!small) return;
+        const ended = new Promise((resolve) => { small.once('exit', resolve); setTimeout(resolve, 5_000); });
+        small.kill('SIGKILL');
+        await ended;
+      });
+
+      it('refuses a connection past the corridor cap, and notes it once', async () => {
+        // Two refusals, each proven accepted by its own 403 and each kept: a refused client's
+        // socket is held until the client is done with it, so these two fill a cap of 2.
+        const held = [await accepted(smallPorts.corridor, 'CONNECT blocked.test:443 HTTP/1.1\r\n\r\n'), await accepted(smallPorts.corridor, 'CONNECT blocked.test:443 HTTP/1.1\r\n\r\n')];
+        try {
+          // Three more, one at a time, and every one of them is dropped.
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            expect(await dropped(smallPorts.corridor), 'a connection past the cap was served').toBe('closed');
+          }
+          // Recorded, and recorded once for three drops: five hundred notes would erase
+          // everything else the space did.
+          const notes = await smallNotes('corridor');
+          expect(notes).toHaveLength(1);
+          expect(notes[0]).toMatchObject({ host: '', port: 0 });
+          // The process is alive, and the journal, which lives in its memory, is readable.
+          expect(small.exitCode).toBe(null);
+        } finally {
+          for (const socket of held) socket.destroy();
+        }
+        // And it serves again once those connections let go.
+        await settle();
+        expect(await accepted(smallPorts.corridor, 'CONNECT blocked.test:443 HTTP/1.1\r\n\r\n')).toBeTruthy();
+      }, 60_000);
+
+      it('refuses a connection past the window cap, and notes it once', async () => {
+        const held = [await accepted(smallPorts.window, 'GET /model/nothing/here HTTP/1.1\r\nHost: gatekeeper\r\n\r\n'), await accepted(smallPorts.window, 'GET /model/nothing/here HTTP/1.1\r\nHost: gatekeeper\r\n\r\n')];
+        try {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            expect(await dropped(smallPorts.window), 'a connection past the cap was served').toBe('closed');
+          }
+          expect(await smallNotes('window')).toHaveLength(1);
+          // One listener's cap is not another's: the corridor is untouched by a full window.
+          const onTheCorridor = await accepted(smallPorts.corridor, 'CONNECT blocked.test:443 HTTP/1.1\r\n\r\n');
+          onTheCorridor.destroy();
+          expect(small.exitCode).toBe(null);
+        } finally {
+          for (const socket of held) socket.destroy();
+        }
+      }, 60_000);
+
+      it('refuses a connection past the control cap, and answers again afterwards', async () => {
+        const held = [await accepted(smallPorts.control, 'GET /health HTTP/1.1\r\nHost: gatekeeper\r\n\r\n'), await accepted(smallPorts.control, 'GET /health HTTP/1.1\r\nHost: gatekeeper\r\n\r\n')];
+        try {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            expect(await dropped(smallPorts.control), 'a connection past the cap was served').toBe('closed');
+          }
+          expect(small.exitCode).toBe(null);
+        } finally {
+          for (const socket of held) socket.destroy();
+        }
+        // Read after they let go, because reading the journal needs the channel this test fills.
+        // The host is the only client of that channel, which is why its cap is the smallest.
+        await settle();
+        expect((await ask(smallPorts.control, '/health')).status).toBe(200);
+        expect(await smallNotes('control')).toHaveLength(1);
+      }, 60_000);
+    });
 
     it('is still healthy afterwards', async () => {
       expect((await control('GET', '/health')).status).toBe(200);
