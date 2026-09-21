@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createCallbackAddress } from '../agent-tool/callback-address.js';
 import { parseGitCredentialQuery } from './credential-broker.js';
 import { parseGitCredentialReference } from './credential-resolver.js';
 
@@ -9,7 +10,6 @@ const NONE = Object.freeze({ mode: 'none' });
 
 const isString = (value) => Object.prototype.toString.call(value) === '[object String]';
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
-const isLoopback = (address) => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 
 /** The origin a redacted remote URL points at, or null when it is not HTTPS. */
 const httpsOrigin = (displayUrl) => {
@@ -87,6 +87,7 @@ export function createGitAgentCredentialRuntime({
   credentialResolver,
   isRepositoryEnabled = null,
   getActivePort,
+  getActiveHost = () => null,
   helperPath = HELPER_PATH,
   nodePath = process.execPath,
   randomBytes = crypto.randomBytes,
@@ -97,6 +98,7 @@ export function createGitAgentCredentialRuntime({
     throw new TypeError('Git agent credential runtime dependencies are invalid');
   }
   let activeToken = null;
+  const { callbackHost, isSameMachineAddress } = createCallbackAddress(getActiveHost);
 
   const managedOrigins = async () => {
     const grants = await listRemoteGrants();
@@ -151,7 +153,7 @@ export function createGitAgentCredentialRuntime({
   };
 
   const authorize = (req) => {
-    if (!activeToken || !isLoopback(req.socket?.remoteAddress)) return false;
+    if (!activeToken || !isSameMachineAddress(req.socket?.remoteAddress)) return false;
     const header = isString(req.headers?.authorization) ? req.headers.authorization : '';
     if (!header.startsWith('Bearer ')) return false;
     const provided = Buffer.from(header.slice(7));
@@ -192,7 +194,7 @@ export function createGitAgentCredentialRuntime({
       return {
         ...config,
         GIT_CONFIG_COUNT: String(index),
-        OPENCHAMBER_GIT_CREDENTIAL_URL: `http://127.0.0.1:${port}/api/git/agent-credential`,
+        OPENCHAMBER_GIT_CREDENTIAL_URL: `http://${callbackHost()}:${port}/api/git/agent-credential`,
         OPENCHAMBER_GIT_CREDENTIAL_TOKEN: activeToken,
       };
     },

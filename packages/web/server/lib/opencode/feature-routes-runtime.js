@@ -508,12 +508,14 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       credentialResolver: gitCredentialResolver,
       isRepositoryEnabled,
       getActivePort: routeDependencies.getActivePort ?? (() => null),
+      getActiveHost: routeDependencies.getActiveHost ?? (() => null),
     });
     gitAgentCredentialRuntime.registerRoutes(app);
     gitShellBoundaryRuntime = createGitShellBoundaryRuntime({
       readBinding: walkthroughBindingService.get,
       isRepositoryEnabled,
       getActivePort: routeDependencies.getActivePort ?? (() => null),
+      getActiveHost: routeDependencies.getActiveHost ?? (() => null),
     });
     gitShellBoundaryRuntime.registerRoutes(app);
     registerGitAgentAuthorityRoutes(app, {

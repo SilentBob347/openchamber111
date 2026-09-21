@@ -2069,6 +2069,8 @@ async function main(options = {}) {
       const address = server?.address?.();
       return address && Number.isInteger(address.port) ? address.port : null;
     },
+    // A pipe listener reports a string here, which has no address to bind back to.
+    getActiveHost: () => server?.address?.()?.address ?? null,
     devServerScanner,
     buildAugmentedPath,
     projectConfigRuntime,

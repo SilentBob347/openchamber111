@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { createCallbackAddress } from './callback-address.js';
 import { appendManagedPlugin } from '../opencode/managed-plugin-config.js';
 import {
   OPENCHAMBER_AGENT_TOOL_ACTION_DEFINITIONS,
@@ -128,26 +129,6 @@ const createResult = ({ ok, action, data, error, exitCode }) => ({
   ...(error ? { error } : {}),
   ...(Number.isInteger(exitCode) ? { exitCode } : {}),
 });
-
-// Node reports an IPv4 peer on a dual-stack socket as `::ffff:<ipv4>`.
-const normalizeAddress = (value) => {
-  const address = (asNonEmptyString(value) || '').toLowerCase();
-  return address.startsWith('::ffff:') ? address.slice('::ffff:'.length) : address;
-};
-
-const isLoopbackAddress = (value) => {
-  const address = normalizeAddress(value);
-  return address === '127.0.0.1' || address === '::1';
-};
-
-const WILDCARD_ADDRESSES = new Set(['0.0.0.0', '::']);
-
-// A wildcard listener answers on loopback. A listener bound to one concrete
-// address answers only there, so that address is the only way back in.
-const resolveConcreteBoundAddress = (value) => {
-  const address = normalizeAddress(value);
-  return address && !WILDCARD_ADDRESSES.has(address) ? address : null;
-};
 
 /**
  * One template, one entry per enabled capability.
@@ -337,7 +318,7 @@ export const createAgentToolRuntime = (dependencies) => {
   const pluginPath = path.join(pluginDirectory, 'openchamber-plugin.js');
   let activeToken = null;
 
-  const getConcreteBoundAddress = () => resolveConcreteBoundAddress(getActiveHost());
+  const { callbackHost, isSameMachineAddress } = createCallbackAddress(getActiveHost);
 
   const prepareManagedOpenCodeEnv = async ({ includeControl = true, includeWeb = true, includeMemory = true } = {}) => {
     const port = getActivePort();
@@ -351,22 +332,11 @@ export const createAgentToolRuntime = (dependencies) => {
     await fsPromises.writeFile(pluginPath, createPluginSource({ includeControl, includeWeb, includeMemory }), { mode: 0o600 });
     activeToken = crypto.randomBytes(32).toString('base64url');
     const pluginUrl = pathToFileURL(pluginPath).href;
-    const callbackAddress = getConcreteBoundAddress() || '127.0.0.1';
-    const callbackHost = callbackAddress.includes(':') ? `[${callbackAddress}]` : callbackAddress;
     return {
       OPENCODE_CONFIG_CONTENT: appendManagedPlugin(env.OPENCODE_CONFIG_CONTENT, pluginUrl, 'managed tool'),
-      OPENCHAMBER_AGENT_TOOL_URL: `http://${callbackHost}:${port}/api/openchamber/agent-tool`,
+      OPENCHAMBER_AGENT_TOOL_URL: `http://${callbackHost()}:${port}/api/openchamber/agent-tool`,
       OPENCHAMBER_AGENT_TOOL_TOKEN: activeToken,
     };
-  };
-
-  // The managed child runs on this machine. Reaching a listener bound to one
-  // concrete address makes the OS source the connection from that same address,
-  // so it stands in for loopback there; any other machine arrives as itself.
-  const isSameMachineAddress = (value) => {
-    if (isLoopbackAddress(value)) return true;
-    const boundAddress = getConcreteBoundAddress();
-    return boundAddress !== null && normalizeAddress(value) === boundAddress;
   };
 
   const authorize = (req) => {

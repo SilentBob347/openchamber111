@@ -27,6 +27,7 @@ const harness = ({
   grants = [{ mode: 'managed', displayUrl: GITHUB }],
   resolve = async () => ({ mode: 'managed', transport: 'https', username: 'x-access-token', password: 'secret-value' }),
   port = 4399,
+  host = null,
   env = {},
   isRepositoryEnabled = null,
 } = {}) => {
@@ -42,6 +43,7 @@ const harness = ({
       credentialResolver: { resolve: async (input) => { resolved.push(input); return resolve(input); } },
       isRepositoryEnabled,
       getActivePort: () => port,
+      getActiveHost: () => host,
       helperPath: '/opt/openchamber/helper.js',
       nodePath: '/usr/bin/node',
       env,
@@ -50,13 +52,13 @@ const harness = ({
 };
 
 /** The route body the helper posts, answered through the registered handler. */
-const ask = async (runtime, payload) => {
+const ask = async (runtime, payload, remoteAddress = '127.0.0.1') => {
   let handler;
   runtime.registerRoutes({ post: (_path, route) => { handler = route; } });
   let status = 200;
   let body;
   await handler(
-    { socket: { remoteAddress: '127.0.0.1' }, headers: { authorization: `Bearer ${payload.token}` }, body: payload.body },
+    { socket: { remoteAddress }, headers: { authorization: `Bearer ${payload.token}` }, body: payload.body },
     { set: () => {}, status: (code) => { status = code; return { end: () => {} }; }, json: (value) => { body = value; } },
   );
   return { status, body };
@@ -147,6 +149,18 @@ describe('createGitAgentCredentialRuntime', () => {
   test('answers nothing when the account behind the grant is gone', async () => {
     const { runtime, token } = await armed({ resolve: async () => { throw new Error('Managed provider account is unavailable'); } });
     expect((await ask(runtime, { token, body: { cwd: '/repo', query: query() } })).body).toEqual({ mode: 'none' });
+  });
+
+  test('follows a listener bound to one concrete address and answers only that machine', async () => {
+    const { runtime, env, token } = await armed({ host: 'fd7a:115c::3' });
+    expect(env.OPENCHAMBER_GIT_CREDENTIAL_URL).toBe('http://[fd7a:115c::3]:4399/api/git/agent-credential');
+    const body = { cwd: '/repo', query: query() };
+    expect((await ask(runtime, { token, body }, 'fd7a:115c::3')).body.mode).toBe('managed');
+    expect((await ask(runtime, { token, body }, '::1')).body.mode).toBe('managed');
+    expect((await ask(runtime, { token, body }, 'fd7a:115c::7')).status).toBe(403);
+    const wildcard = await armed({ host: '0.0.0.0' });
+    expect(wildcard.env.OPENCHAMBER_GIT_CREDENTIAL_URL).toBe('http://127.0.0.1:4399/api/git/agent-credential');
+    expect((await ask(wildcard.runtime, { token: wildcard.token, body }, '192.168.1.20')).status).toBe(403);
   });
 
   test('refuses a request without the current token, and never leaves one armed for an empty injection', async () => {

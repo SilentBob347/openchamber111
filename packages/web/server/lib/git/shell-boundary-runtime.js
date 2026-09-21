@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
+import { createCallbackAddress } from '../agent-tool/callback-address.js';
 import { shellCommandTransfers } from './shell-boundary.js';
 
 const ALLOW = Object.freeze({ blocked: false });
 const MAX_COMMAND_BYTES = 128 * 1024;
 
 const isString = (value) => Object.prototype.toString.call(value) === '[object String]';
-const isLoopback = (address) => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 
 const REASON = 'This repository is configured in OpenChamber, so its transfers run as the account it is bound to.'
   + ' Use the openchamber tool — git.push, git.pull or git.fetch — instead of running this in the shell.'
@@ -28,12 +28,14 @@ export function createGitShellBoundaryRuntime({
   readBinding,
   isRepositoryEnabled = null,
   getActivePort,
+  getActiveHost = () => null,
   randomBytes = crypto.randomBytes,
 }) {
   if (!(readBinding instanceof Function) || !(getActivePort instanceof Function)) {
     throw new TypeError('Git shell boundary runtime dependencies are invalid');
   }
   let activeToken = null;
+  const { callbackHost, isSameMachineAddress } = createCallbackAddress(getActiveHost);
 
   const decide = async (payload) => {
     const command = isString(payload?.command) ? payload.command : '';
@@ -55,7 +57,7 @@ export function createGitShellBoundaryRuntime({
   };
 
   const authorize = (req) => {
-    if (!activeToken || !isLoopback(req.socket?.remoteAddress)) return false;
+    if (!activeToken || !isSameMachineAddress(req.socket?.remoteAddress)) return false;
     const header = isString(req.headers?.authorization) ? req.headers.authorization : '';
     if (!header.startsWith('Bearer ')) return false;
     const provided = Buffer.from(header.slice(7));
@@ -72,7 +74,7 @@ export function createGitShellBoundaryRuntime({
       }
       activeToken = randomBytes(32).toString('base64url');
       return {
-        OPENCHAMBER_SHELL_BOUNDARY_URL: `http://127.0.0.1:${port}/api/git/shell-boundary`,
+        OPENCHAMBER_SHELL_BOUNDARY_URL: `http://${callbackHost()}:${port}/api/git/shell-boundary`,
         OPENCHAMBER_SHELL_BOUNDARY_TOKEN: activeToken,
       };
     },

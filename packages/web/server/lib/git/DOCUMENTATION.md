@@ -293,8 +293,9 @@ when the child starts: the shared UI records a pending OpenCode restart when a
 remote first receives an HTTPS credential grant. The bearer token lives only in
 that child's environment and dies with the process. `/api/git/agent-credential` and
 `/api/git/shell-boundary` are exempt from the UI session guard because they
-carry that token and refuse any peer that is not loopback: the helper has no UI session and cannot obtain
-one, so the guard would make bindings silently unenforceable wherever a UI
+carry that token and refuse any peer that is not this machine (`agent-tool/callback-address.js`: loopback,
+or the bound address when the listener is bound to one concrete address, which is also where the
+callback URL points): the helper has no UI session and cannot obtain one, so the guard would make bindings silently unenforceable wherever a UI
 password is set, which Docker requires.
 
 `shell-boundary-runtime.js` closes the last gap. The credential answer already

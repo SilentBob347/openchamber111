@@ -10,22 +10,23 @@ const bound = {
 const missing = { status: 'missing', revision: 0, binding: null,
   repository: { repositoryId: 'repo_one', configRevision: 'config_one', bare: false, remotes: [] } };
 
-const harness = ({ binding = bound, port = 4399, isRepositoryEnabled = null } = {}) => createGitShellBoundaryRuntime({
+const harness = ({ binding = bound, port = 4399, host = null, isRepositoryEnabled = null } = {}) => createGitShellBoundaryRuntime({
   isRepositoryEnabled,
   readBinding: async (directory) => {
     if (directory === '/not-a-repo') throw new Error('Not a repository');
     return binding;
   },
   getActivePort: () => port,
+  getActiveHost: () => host,
 });
 
-const ask = async (runtime, { token, body }) => {
+const ask = async (runtime, { token, body, remoteAddress = '127.0.0.1' }) => {
   let handler;
   runtime.registerRoutes({ post: (_path, route) => { handler = route; } });
   let status = 200;
   let answer;
   await handler(
-    { socket: { remoteAddress: '127.0.0.1' }, headers: { authorization: `Bearer ${token}` }, body },
+    { socket: { remoteAddress }, headers: { authorization: `Bearer ${token}` }, body },
     { set: () => {}, status: (code) => { status = code; return { end: () => {} }; }, json: (value) => { answer = value; } },
   );
   return { status, answer };
@@ -43,6 +44,16 @@ describe('createGitShellBoundaryRuntime', () => {
     expect(env.OPENCHAMBER_SHELL_BOUNDARY_URL).toBe('http://127.0.0.1:4399/api/git/shell-boundary');
     expect(env.OPENCHAMBER_SHELL_BOUNDARY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(harness({ port: 0 }).prepareManagedOpenCodeEnv()).toEqual({});
+  });
+
+  test('follows a listener bound to one concrete address and answers only that machine', async () => {
+    const { runtime, env, token } = armed({ host: '100.100.0.3' });
+    expect(env.OPENCHAMBER_SHELL_BOUNDARY_URL).toBe('http://100.100.0.3:4399/api/git/shell-boundary');
+    const body = { command: 'git push origin main', directory: '/repo' };
+    expect((await ask(runtime, { token, body, remoteAddress: '::ffff:100.100.0.3' })).answer.blocked).toBe(true);
+    expect((await ask(runtime, { token, body, remoteAddress: '127.0.0.1' })).answer.blocked).toBe(true);
+    expect((await ask(runtime, { token, body, remoteAddress: '100.100.0.7' })).status).toBe(403);
+    expect((await ask(armed().runtime, { token: armed().token, body, remoteAddress: '192.168.1.20' })).status).toBe(403);
   });
 
   test('refuses a transfer in a configured repository and says what to use instead', async () => {
