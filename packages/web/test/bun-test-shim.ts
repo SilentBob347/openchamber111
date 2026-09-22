@@ -18,17 +18,6 @@ const mock = Object.assign(
 );
 const spyOn = vi.spyOn;
 
-// bun's `setSystemTime(date)` pins `Date` and `setSystemTime()` restores it.
-// Only `Date` is faked, so timers and promises in the code under test keep
-// running on the real clock.
-const setSystemTime = (date?: Date | number) => {
-  if (date === undefined) {
-    vi.useRealTimers();
-    return;
-  }
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(date);
-};
 
 export {
   afterAll,
@@ -39,7 +28,6 @@ export {
   expect,
   it,
   mock,
-  setSystemTime,
   spyOn,
   test,
   vi,
