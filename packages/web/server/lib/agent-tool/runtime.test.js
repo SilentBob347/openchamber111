@@ -388,8 +388,8 @@ describe('managed agent tool runtime', () => {
   });
 
   it('aborts the actions a session still has running when its turn is cancelled', async () => {
-    // OpenCode 2 gives the plugin no abort signal, so the server ends the
-    // action itself when the event stream reports the cancel.
+    // Safety net beside the plugin's forwarded abort signal: the server also
+    // ends the action itself when the event stream reports the cancel.
     const executeAction = vi.fn(async (_action, _input, _directory, options) => {
       await new Promise((resolve, reject) => {
         options.signal.addEventListener('abort', () => reject(Object.assign(new Error('OpenChamber action was cancelled'), { statusCode: 499 })), { once: true });

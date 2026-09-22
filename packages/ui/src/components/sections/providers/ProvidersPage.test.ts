@@ -20,7 +20,7 @@ const integration = (overrides: Partial<IntegrationInfo> = {}): IntegrationInfo 
   ...overrides,
 });
 
-const credential: ConnectionInfo = { type: 'credential', id: 'cred_1', label: 'API key' };
+const credential: ConnectionInfo = { type: 'credential', id: 'cred_1', label: 'API key', method: 'key' };
 const envConnection: ConnectionInfo = { type: 'env', name: 'ANTHROPIC_API_KEY' };
 
 describe('ProvidersPage available provider loading', () => {

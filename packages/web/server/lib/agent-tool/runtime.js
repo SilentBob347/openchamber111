@@ -218,10 +218,12 @@ const createToolEntry = ({ name, description, definitions, parameters }) => Stri
               authorization: "Bearer " + token,
               "content-type": "application/json",
             },
-            // OpenCode 2 no longer hands a tool its session directory (nor an
-            // abort signal), so the session id goes over instead and
-            // OpenChamber resolves the directory on its own side.
+            // OpenCode 2 no longer hands a tool its session directory, so the
+            // session id goes over instead and OpenChamber resolves the
+            // directory on its own side. The signal fires when the session is
+            // aborted, so the OpenChamber side stops the action too.
             body: JSON.stringify({ input: args, sessionID: context.sessionID, tool: ${JSON.stringify(name)} }),
+            signal: context.signal,
           })
           const content = await response.text()
           let result = null
@@ -428,9 +430,10 @@ export const createAgentToolRuntime = (dependencies) => {
     }
   };
 
-  // In-flight actions per session. OpenCode 2 gives a plugin tool no abort
-  // signal, so the plugin's request stays open after the user cancels the
-  // turn; the server learns about the cancel from the event stream instead
+  // In-flight actions per session. The plugin forwards OpenCode's abort
+  // signal (2.0.12+), which closes its request and aborts the action here.
+  // Before that release the request stayed open after the user cancelled the
+  // turn, so the server also listens for the cancel on the event stream
   // (`session.idle` with `aborted: true`) and aborts the actions itself.
   const inflightBySession = new Map();
   const trackInflight = (sessionID, controller) => {

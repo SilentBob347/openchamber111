@@ -413,7 +413,7 @@ export const ProvidersPage: React.FC = () => {
     // "Credentials missing" summary before the integration refetch arrives.
     setIntegrations((prev) => (prev ?? []).map((integration) => (
       integration.id === providerId && integration.connections.length === 0
-        ? { ...integration, connections: [{ type: 'credential', id: `pending:${providerId}`, label: providerId }] }
+        ? { ...integration, connections: [{ type: 'credential', id: `pending:${providerId}`, label: providerId, method: 'key' }] }
         : integration
     )));
     setAuthPanelDismissedForId(null);
