@@ -54,23 +54,45 @@ export const isAnswerableField = (field: FormField): field is AnswerableField =>
 /** The label a field shows; falls back to its key so nothing renders blank. */
 export const fieldLabel = (field: FormField): string => field.title ?? field.key;
 
+// Mirrors OpenCode's `matches()`: a condition on a field that has no active
+// answer is false for `eq` and `neq` alike.
 const matchesCondition = (condition: FormWhen, value: FormValue | undefined): boolean => {
-  const current = value === undefined ? '' : String(value);
+  if (value === undefined) return false;
+  const current = String(value);
   const expected = String(condition.value);
   return condition.op === 'eq' ? current === expected : current !== expected;
 };
 
-/** True when every `when` condition on a field is satisfied by the answers so far. */
-export const isFieldVisible = (field: FormField, values: Record<string, FormValue>): boolean => {
+/**
+ * True when every `when` condition on a field is satisfied by the answers of
+ * the fields that are themselves active; pass the answers `visibleFields`
+ * accumulated, not the raw value map.
+ */
+export const isFieldVisible = (field: FormField, activeValues: Record<string, FormValue>): boolean => {
   // `external` fields are pure links and carry no conditions.
   if (!isAnswerableField(field)) return true;
-  return (field.when ?? []).every((condition) => matchesCondition(condition, values[condition.key]));
+  return (field.when ?? []).every((condition) => matchesCondition(condition, activeValues[condition.key]));
 };
 
+/**
+ * Fields in declaration order whose conditions hold against the answers of
+ * the active fields before them, so a hidden field's value cannot reveal a
+ * later one. Same walk as the server's form evaluation.
+ */
 export const visibleFields = (
   fields: readonly FormField[],
   values: Record<string, FormValue>,
-): FormField[] => fields.filter((field) => isFieldVisible(field, values));
+): FormField[] => {
+  const active: Record<string, FormValue> = {};
+  const shown: FormField[] = [];
+  for (const field of fields) {
+    if (!isFieldVisible(field, active)) continue;
+    shown.push(field);
+    const value = values[field.key];
+    if (isAnswerableField(field) && value !== undefined) active[field.key] = value;
+  }
+  return shown;
+};
 
 /**
  * Seeds the answer map. A field's declared default wins; otherwise a field with

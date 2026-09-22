@@ -49,7 +49,9 @@ export const FormCard: React.FC<FormCardProps> = ({ form }) => {
     }, [form.sessionID, currentSessionId, sessions]);
 
     const fields = form.fields;
-    const [values, setValues] = React.useState<FormValues>(() => initialFormValues(fields));
+    // The card shows every field at once, so an external link is on screen
+    // from the start and its acknowledgement travels with the reply.
+    const [values, setValues] = React.useState<FormValues>(() => initialFormValues(fields, { acknowledgeExternal: true }));
     const [isResponding, setIsResponding] = React.useState(false);
     const [hasResponded, setHasResponded] = React.useState(false);
     const [showErrors, setShowErrors] = React.useState(false);
@@ -61,7 +63,7 @@ export const FormCard: React.FC<FormCardProps> = ({ form }) => {
     // form whose fields actually changed, starts over.
     const fieldsSignature = fields.map((field) => `${field.key}:${field.type}`).join('|');
     React.useEffect(() => {
-        setValues(initialFormValues(fields));
+        setValues(initialFormValues(fields, { acknowledgeExternal: true }));
         setHasResponded(false);
         setShowErrors(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps

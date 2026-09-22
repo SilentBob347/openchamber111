@@ -67,7 +67,18 @@ describe('field visibility', () => {
 
     expect(isFieldVisible(field, { mode: 'default' })).toBe(false);
     expect(isFieldVisible(field, { mode: 'other' })).toBe(true);
-    expect(isFieldVisible(field, {})).toBe(true);
+    // An unanswered controlling field satisfies neither `eq` nor `neq`, as on the server.
+    expect(isFieldVisible(field, {})).toBe(false);
+  });
+
+  test('a hidden field cannot reveal a later one through its value', () => {
+    const fields: FormField[] = [
+      { type: 'string', key: 'mode', title: 'Mode' },
+      { type: 'string', key: 'region', title: 'Region', when: [{ key: 'mode', op: 'eq', value: 'cloud' }] },
+      { type: 'string', key: 'endpoint', title: 'Endpoint', when: [{ key: 'region', op: 'eq', value: 'eu' }] },
+    ];
+    expect(visibleFields(fields, { mode: 'local', region: 'eu' }).map((f) => f.key)).toEqual(['mode']);
+    expect(visibleFields(fields, { mode: 'cloud', region: 'eu' }).map((f) => f.key)).toEqual(['mode', 'region', 'endpoint']);
   });
 
   test('an external field carries no conditions and always shows', () => {

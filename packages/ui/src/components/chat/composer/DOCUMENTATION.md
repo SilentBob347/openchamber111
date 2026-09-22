@@ -36,6 +36,22 @@ oldest pending form and counts the rest in its header. The BTW sheet keeps
 the inline `FormCard` for its child session's forms; both render a field
 through `FormFieldControl`.
 
+`formCardState.ts` decides what both surfaces show and send, mirroring
+OpenCode's `Form.validateAnswer`: fields are evaluated in declaration order,
+a `when` clause reads only the answers of active earlier fields (an
+unanswered target is false for `eq` and `neq` alike, so hiding a field hides
+its whole chain of dependents), and the reply carries only active fields.
+An `external` field must be answered `true` or the server refuses the whole
+reply: the dock acknowledges it when its step opens, the card (all fields on
+screen) from the start, and an unacknowledged link counts as missing.
+
+An MCP elicitation is a form OpenCode files under the session id `global`
+(`LOCATION_SCOPED_FORM_SESSION_ID` in `sync-context.tsx`): it belongs to the
+directory, not to a turn. `useScopedBlockingForms` appends the directory's
+`global` forms after the session subtree's own, so the dock (and the BTW
+sheet's inline card) offer it from every session of that directory, and the
+reply resolves its directory from the store that holds the form.
+
 `PermissionDock` is the agent's permission requests for the composer's
 session, its subagents' included, in the same frame: one dot per pending
 request with the current one solid, the request's tool in the header, and

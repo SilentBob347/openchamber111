@@ -37,7 +37,8 @@ import {
  * of Next on the last one. Fields gated by a `when` clause join or leave the
  * steps as their controlling answer changes, so the count is honest at every
  * moment. An `external` field is an information step: a link to open,
- * nothing to answer. Enter in a text box moves to the next step (Submit on
+ * nothing to type; opening the step acknowledges it, which the reply must
+ * carry as `true` for the server to accept it. Enter in a text box moves to the next step (Submit on
  * the last); Cmd/Ctrl+Enter submits from anywhere in the dock.
  *
  * Mounted once per composer, inside the shared floating frame, so it shares
@@ -53,6 +54,9 @@ interface FormDockProps {
 
 export const FormDock: React.FC<FormDockProps> = ({ sessionId, directory, hidden }) => {
     const forms = useScopedBlockingForms(sessionId, directory);
+    // The session's own forms come first; a location-scoped form (an MCP
+    // elicitation, owned by no session) follows and shows in every session
+    // of the directory that raised it.
     const form = forms[0];
     if (hidden || !form) return null;
     // Keyed on the form id so a different request starts from a clean slate.
@@ -60,7 +64,7 @@ export const FormDock: React.FC<FormDockProps> = ({ sessionId, directory, hidden
 };
 
 const isStepAnswered = (field: FormField, values: FormValues): boolean => {
-    if (!isAnswerableField(field)) return true;
+    if (!isAnswerableField(field)) return valueOf(values, field.key).acknowledged;
     const answer = fieldAnswer(field, values);
     if (answer === undefined) return false;
     return !(Array.isArray(answer) && answer.length === 0);
@@ -112,6 +116,20 @@ const FormDockPanel: React.FC<{ form: FormRequest; waiting: number }> = ({ form,
     const updateValue = React.useCallback((key: string, patch: Partial<FormValues[string]>) => {
         setValues((previous) => ({ ...previous, [key]: { ...valueOf(previous, key), ...patch } }));
     }, []);
+
+    // Opening an external step is the acknowledgement OpenCode requires for
+    // it (`true` in the reply); Submit stays off until every link step has
+    // been opened, and a keyboard submit jumps to the first one that has not.
+    const currentFieldKey = currentField?.key;
+    const currentFieldIsExternal = currentField?.type === 'external';
+    React.useEffect(() => {
+        if (!currentFieldKey || !currentFieldIsExternal) return;
+        setValues((previous) => {
+            const value = valueOf(previous, currentFieldKey);
+            if (value.acknowledged) return previous;
+            return { ...previous, [currentFieldKey]: { ...value, acknowledged: true } };
+        });
+    }, [currentFieldIsExternal, currentFieldKey]);
 
     const handleSubmit = React.useCallback(async () => {
         if (!canSubmit) {
