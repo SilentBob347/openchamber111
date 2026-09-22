@@ -1,5 +1,4 @@
 import express from 'express';
-import { OpenCode } from '@opencode/client';
 import {
   createWorktree as createWorktreeDefault,
   getWorktreeBootstrapStatus as getWorktreeBootstrapStatusDefault,
@@ -11,7 +10,8 @@ import { parseScheduledCommandPrompt } from '../scheduled-tasks/runtime.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
 import { OpenChamberControlError, asControlError } from '../openchamber-control/error.js';
 import { createArchiveStore } from './archive-store.js';
-import { createSessionMetadataStore } from './session-metadata-store.js';
+import { createOpenCodeClient as defaultCreateOpenCodeClient } from './opencode-client.js';
+import { createSessionMetadataStore, createUpstreamSessionMetadataReader } from './session-metadata-store.js';
 
 const asNonEmptyString = (value) => {
   if (typeof value !== 'string') return null;
@@ -109,20 +109,6 @@ const resolveProjectDefaults = (settings, directory, projectId) => {
 };
 
 /** `x-opencode-directory` is how v2 scopes a request; there is no query param. */
-const buildDirectoryHeaders = (directory) => ({
-  // OpenCode rejects non-ASCII header values; the official client sends this
-  // header percent-encoded, so match that wire format (non-ASCII checkout
-  // paths such as "Masaüstü" otherwise fail every dispatched prompt).
-  ...(directory ? { 'x-opencode-directory': encodeURIComponent(directory) } : {}),
-});
-
-const defaultCreateOpenCodeClient = ({ baseUrl, headers, directory }) => OpenCode.make({
-  baseUrl,
-  headers: { ...headers, ...buildDirectoryHeaders(directory) },
-  // Resolved per call so a test (or a runtime that swaps the global) is honoured.
-  fetch: (...args) => globalThis.fetch(...args),
-});
-
 /**
  * Everything the default model/agent resolution needs, from one directory-scoped
  * client. A failed lookup answers empty on purpose: an empty catalogue means
@@ -404,7 +390,14 @@ export const createOpenChamberSessionService = (dependencies) => {
     throw new Error('openchamber session routes need either both stores or a dataDir');
   }
   const archiveStore = injectedArchiveStore || createArchiveStore({ dataDir });
-  const sessionMetadataStore = injectedSessionMetadataStore || createSessionMetadataStore({ dataDir });
+  const sessionMetadataStore = injectedSessionMetadataStore || createSessionMetadataStore({
+    dataDir,
+    readUpstreamMetadata: createUpstreamSessionMetadataReader({
+      buildOpenCodeUrl,
+      getOpenCodeAuthHeaders,
+      createOpenCodeClient,
+    }),
+  });
 
   const openCodeBaseUrl = () => buildOpenCodeUrl('/', '').replace(/\/$/, '');
   const clientFor = (directory) => createOpenCodeClient({
@@ -670,34 +663,13 @@ export const createOpenChamberSessionService = (dependencies) => {
    * pinned notes lives. The broadcast carries the full merged object, because a
    * client that missed an earlier patch must not have to reconstruct it.
    */
-  /**
-   * A session that OpenCode migrated from v1 still carries the OpenChamber
-   * metadata v1 wrote onto its record (goal, assist, review kind, pinned
-   * context). The store never saw it, and the proxy overlays the store per
-   * top-level key, so the first write here would replace the whole
-   * `openchamber` object with the patch alone. Seed the store from the record
-   * once, before the first patch, so nothing v1 stored is lost.
-   */
-  const seedMetadataFromOpenCode = async (sessionID, directory) => {
-    if (typeof sessionMetadataStore.has !== 'function' || await sessionMetadataStore.has(sessionID)) return;
-    let session = null;
-    try {
-      session = await clientFor(directory).session.get({ sessionID });
-    } catch {
-      return;
-    }
-    const record = session && typeof session === 'object' && 'data' in session ? session.data : session;
-    const theirs = record?.metadata;
-    if (!theirs || typeof theirs !== 'object' || Array.isArray(theirs) || Object.keys(theirs).length === 0) return;
-    await sessionMetadataStore.setSessionMetadata(sessionID, theirs);
-  };
-
+  // Seeding a session OpenCode still holds metadata for (migrated from v1, or
+  // set at create time) is the store's own job, so every writer gets it.
   const writeMetadata = async (sessionID, patch, directory = '') => {
-    await seedMetadataFromOpenCode(sessionID, directory);
     if (typeof persistSessionMetadata === 'function') {
       return persistSessionMetadata(sessionID, patch, { directory });
     }
-    const metadata = await sessionMetadataStore.setSessionMetadata(sessionID, patch);
+    const metadata = await sessionMetadataStore.setSessionMetadata(sessionID, patch, { directory });
     broadcastMetadata(sessionID, metadata);
     return metadata;
   };
@@ -713,10 +685,10 @@ export const createOpenChamberSessionService = (dependencies) => {
     return { metadata: await writeMetadata(id, patch, asNonEmptyString(payload?.directory) || '') };
   };
 
-  const getMetadata = async (sessionID) => {
+  const getMetadata = async (sessionID, directory = '') => {
     const id = asNonEmptyString(sessionID);
     if (!id) throw new OpenChamberControlError('a session id is required', 400);
-    return { metadata: await sessionMetadataStore.get(id) };
+    return { metadata: await sessionMetadataStore.get(id, { directory }) };
   };
 
   const broadcastArchived = (sessionID, archivedAt) => {
@@ -1040,7 +1012,10 @@ export const registerOpenChamberSessionRoutes = (app, dependencies) => {
 
   app.get('/api/openchamber/sessions/:sessionId/metadata', async (req, res) => {
     try {
-      return res.json(await service.getMetadata(req.params.sessionId));
+      return res.json(await service.getMetadata(
+        req.params.sessionId,
+        asNonEmptyString(req.query?.directory) || '',
+      ));
     } catch (error) {
       console.error('[OpenChamberSessions] failed to read session metadata:', error);
       return sendServiceError(res, error, 'Failed to read session metadata');

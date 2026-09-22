@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -73,6 +76,8 @@ globalThis.__openchamberCreateWorktreeMock = createWorktreeMock;
 globalThis.__openchamberGetWorktreeBootstrapStatusMock = getWorktreeBootstrapStatusMock;
 
 let registerOpenChamberSessionRoutes;
+let createSessionMetadataStore;
+let createUpstreamSessionMetadataReader;
 
 // Every `OpenCode.make` call is recorded so tests can assert on the scoping
 // headers the routes build.
@@ -201,6 +206,7 @@ const createApp = (overrides = {}, options = {}) => {
 describe('openchamber session routes', () => {
   beforeAll(async () => {
     ({ registerOpenChamberSessionRoutes } = await import('./routes.js'));
+    ({ createSessionMetadataStore, createUpstreamSessionMetadataReader } = await import('./session-metadata-store.js'));
   });
 
   beforeEach(() => {
@@ -337,7 +343,18 @@ describe('openchamber session routes', () => {
         location: { directory: '/repo/app' },
         metadata: { openchamber: { kind: 'review', assist: { recap: 'from v1' } } },
       }));
-      const { app, sessionMetadataStore } = createApp();
+      // The real store, reading OpenCode through the same mocked client the
+      // routes use: seeding is the store's job, not the route's.
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-routes-metadata-'));
+      const { app, sessionMetadataStore } = createApp({
+        sessionMetadataStore: createSessionMetadataStore({
+          dataDir,
+          readUpstreamMetadata: createUpstreamSessionMetadataReader({
+            buildOpenCodeUrl: (route) => `http://opencode.test${route}`,
+            getOpenCodeAuthHeaders: () => ({ Authorization: 'Bearer test' }),
+          }),
+        }),
+      });
 
       const response = await request(app)
         .post('/api/openchamber/sessions/ses_v1/metadata')
@@ -356,6 +373,7 @@ describe('openchamber session routes', () => {
         .send({ patch: { openchamber: { goal: { status: 'paused' } } } })
         .expect(200);
       expect(sessionGetMock).not.toHaveBeenCalled();
+      fs.rmSync(dataDir, { recursive: true, force: true });
     });
 
     it('merge-patches metadata, returns the merged object, and announces it', async () => {

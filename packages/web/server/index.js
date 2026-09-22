@@ -123,7 +123,7 @@ import { createDevTunnelRuntime } from './lib/dev-tunnel/runtime.js';
 import { registerBrowserControlRoutes } from './lib/browser-control/routes.js';
 import { createManagedConfigRuntime } from './lib/opencode/managed-config-file.js';
 import { createOpenChamberSessionService } from './lib/openchamber-sessions/routes.js';
-import { createSessionMetadataStore } from './lib/openchamber-sessions/session-metadata-store.js';
+import { createSessionMetadataStore, createUpstreamSessionMetadataReader } from './lib/openchamber-sessions/session-metadata-store.js';
 import { createScheduledTaskService } from './lib/scheduled-tasks/service.js';
 import { createOpenChamberControlService } from './lib/openchamber-control/service.js';
 import { OpenChamberControlError } from './lib/openchamber-control/error.js';
@@ -506,12 +506,23 @@ const broadcastOpenChamberUiEvent = createGlobalUiEventBroadcaster({
  * accepts session metadata only at create time, so one store owns all of it and
  * the proxy folds it back onto the sessions it serves.
  */
-const sessionMetadataStore = createSessionMetadataStore({ dataDir: OPENCHAMBER_DATA_DIR });
+const sessionMetadataStore = createSessionMetadataStore({
+  dataDir: OPENCHAMBER_DATA_DIR,
+  // A session the store has never held is seeded from OpenCode's record (what
+  // v1 wrote onto a migrated session, or what was set at create time) before
+  // the first read or write, so a patch never replaces that namespace.
+  // Called, not captured: the OpenCode URL and auth helpers are declared
+  // further down and only ever used once a request arrives.
+  readUpstreamMetadata: (sessionID, scope) => createUpstreamSessionMetadataReader({
+    buildOpenCodeUrl,
+    getOpenCodeAuthHeaders,
+  })(sessionID, scope),
+});
 
 const readStoredSessionMetadata = (sessionID) => sessionMetadataStore.get(sessionID);
 
 const persistSessionMetadataPatch = async (sessionID, patch, { directory = '' } = {}) => {
-  const metadata = await sessionMetadataStore.setSessionMetadata(sessionID, patch);
+  const metadata = await sessionMetadataStore.setSessionMetadata(sessionID, patch, { directory });
   // The full merged object, so a client that missed an earlier patch does not
   // have to reconstruct it.
   broadcastOpenChamberUiEvent({

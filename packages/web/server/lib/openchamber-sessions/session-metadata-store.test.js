@@ -172,6 +172,108 @@ describe('createSessionMetadataStore', () => {
     await expect(store.get('ses_1')).resolves.toEqual({});
   });
 
+  it('keeps a later successful write when an earlier one fails and rolls back', async () => {
+    const dataDir = makeDataDir();
+    let failNext = true;
+    let releaseFailure;
+    const failureReleased = new Promise((resolve) => { releaseFailure = resolve; });
+    const fsPromises = {
+      ...fs.promises,
+      writeFile: async (...args) => {
+        if (failNext) {
+          failNext = false;
+          await failureReleased;
+          throw new Error('disk full');
+        }
+        return fs.promises.writeFile(...args);
+      },
+    };
+    const store = createSessionMetadataStore({ dataDir, fsPromises });
+
+    const failing = store.setSessionMetadata('ses_1', { a: 1 });
+    const succeeding = store.setSessionMetadata('ses_1', { b: 1 });
+    releaseFailure();
+
+    await expect(failing).rejects.toThrow('disk full');
+    await expect(succeeding).resolves.toEqual({ b: 1 });
+    // The failed write's rollback must not undo what the later write committed.
+    await expect(store.get('ses_1')).resolves.toEqual({ b: 1 });
+    expect(JSON.parse(readFile(dataDir))).toEqual({ ses_1: { b: 1 } });
+  });
+
+  describe('seeding from the OpenCode record', () => {
+    it('folds what OpenCode holds into the first write instead of replacing it', async () => {
+      const dataDir = makeDataDir();
+      const readUpstreamMetadata = vi.fn(async () => ({ openchamber: { kind: 'review', assist: { recap: 'v1' } } }));
+      const store = createSessionMetadataStore({ dataDir, readUpstreamMetadata });
+
+      const merged = await store.setSessionMetadata('ses_v1', { openchamber: { goal: { status: 'active' } } }, { directory: '/repo' });
+      expect(merged).toEqual({ openchamber: { kind: 'review', assist: { recap: 'v1' }, goal: { status: 'active' } } });
+      expect(readUpstreamMetadata).toHaveBeenCalledWith('ses_v1', { directory: '/repo' });
+      expect(JSON.parse(readFile(dataDir))).toEqual({ ses_v1: merged });
+
+      // Once seeded, OpenCode is not consulted again for that session.
+      await store.setSessionMetadata('ses_v1', { openchamber: { goal: { status: 'paused' } } });
+      await store.get('ses_v1');
+      expect(readUpstreamMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('seeds a read too, so readers see what OpenCode holds and the seed persists', async () => {
+      const dataDir = makeDataDir();
+      const readUpstreamMetadata = vi.fn(async () => ({ openchamber: { pins: { notes: ['n1'] } } }));
+      const store = createSessionMetadataStore({ dataDir, readUpstreamMetadata });
+
+      await expect(store.get('ses_v1')).resolves.toEqual({ openchamber: { pins: { notes: ['n1'] } } });
+      expect(JSON.parse(readFile(dataDir))).toEqual({ ses_v1: { openchamber: { pins: { notes: ['n1'] } } } });
+      await expect(store.get('ses_v1')).resolves.toEqual({ openchamber: { pins: { notes: ['n1'] } } });
+      expect(readUpstreamMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops the write when OpenCode could not be asked, and retries on the next write', async () => {
+      const dataDir = makeDataDir();
+      const readUpstreamMetadata = vi.fn()
+        .mockRejectedValueOnce(new Error('opencode down'))
+        .mockResolvedValueOnce({ openchamber: { kind: 'review' } });
+      const store = createSessionMetadataStore({ dataDir, readUpstreamMetadata });
+
+      await expect(store.setSessionMetadata('ses_v1', { openchamber: { goal: {} } })).rejects.toThrow('opencode down');
+      await expect(store.getAll()).resolves.toEqual({});
+      expect(fs.existsSync(path.join(dataDir, 'sessions-metadata.json'))).toBe(false);
+
+      await expect(store.setSessionMetadata('ses_v1', { openchamber: { goal: {} } }))
+        .resolves.toEqual({ openchamber: { kind: 'review', goal: {} } });
+    });
+
+    it('surfaces a failed read instead of answering empty', async () => {
+      const store = createSessionMetadataStore({
+        dataDir: makeDataDir(),
+        readUpstreamMetadata: async () => { throw new Error('opencode down'); },
+      });
+      await expect(store.get('ses_v1')).rejects.toThrow('opencode down');
+    });
+
+    it('treats a session OpenCode does not know, or holds nothing for, as definitively empty', async () => {
+      const readUpstreamMetadata = vi.fn(async () => null);
+      const store = createSessionMetadataStore({ dataDir: makeDataDir(), readUpstreamMetadata });
+
+      await expect(store.get('ses_new')).resolves.toEqual({});
+      await expect(store.setSessionMetadata('ses_new', { a: 1 })).resolves.toEqual({ a: 1 });
+      await store.setSessionMetadata('ses_new', { b: 1 });
+      expect(readUpstreamMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not ask OpenCode about a session already on disk', async () => {
+      const dataDir = makeDataDir();
+      fs.writeFileSync(path.join(dataDir, 'sessions-metadata.json'), JSON.stringify({ ses_1: { a: 1 } }), 'utf8');
+      const readUpstreamMetadata = vi.fn(async () => ({ stale: true }));
+      const store = createSessionMetadataStore({ dataDir, readUpstreamMetadata });
+
+      await expect(store.get('ses_1')).resolves.toEqual({ a: 1 });
+      await expect(store.setSessionMetadata('ses_1', { b: 1 })).resolves.toEqual({ a: 1, b: 1 });
+      expect(readUpstreamMetadata).not.toHaveBeenCalled();
+    });
+  });
+
   it('forgets a session on request', async () => {
     const dataDir = makeDataDir();
     const store = createSessionMetadataStore({ dataDir });

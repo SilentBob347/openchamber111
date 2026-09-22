@@ -62,7 +62,18 @@ export const createArchiveStore = ({
    * a file we could not read would drop exactly the state we are protecting.
    */
   let writable = false;
-  let writeChain = Promise.resolve();
+  /**
+   * One batch at a time: mutate memory, persist, roll back on failure.
+   * Serializing only the file write is not enough — a rollback that runs after
+   * a later batch has already committed would erase that batch's memory while
+   * its bytes stay on disk, and the next write would then erase the bytes too.
+   */
+  let transactionChain = Promise.resolve();
+  const runExclusive = (work) => {
+    const next = transactionChain.then(work, work);
+    transactionChain = next.then(() => undefined, () => undefined);
+    return next;
+  };
 
   const snapshot = () => Object.fromEntries(entries);
 
@@ -134,27 +145,25 @@ export const createArchiveStore = ({
     return loadPromise;
   };
 
-  const persist = () => {
+  /** Only ever called inside `runExclusive`, so two batches cannot interleave their renames. */
+  const persist = async () => {
     const payload = JSON.stringify(snapshot());
-    const write = async () => {
-      await fsPromises.mkdir(dataDir, { recursive: true });
-      // Temp file in the same directory so the rename is atomic on one device:
-      // a reader sees either the previous file or the complete new one.
-      const tmpPath = `${filePath}.${process.pid}.tmp`;
-      await fsPromises.writeFile(tmpPath, payload, 'utf8');
-      await fsPromises.rename(tmpPath, filePath);
-    };
-    // Serialized so two overlapping batches cannot interleave their renames.
-    const next = writeChain.then(write, write);
-    writeChain = next.catch(() => undefined);
-    return next;
+    await fsPromises.mkdir(dataDir, { recursive: true });
+    // Temp file in the same directory so the rename is atomic on one device:
+    // a reader sees either the previous file or the complete new one.
+    const tmpPath = `${filePath}.${process.pid}.tmp`;
+    await fsPromises.writeFile(tmpPath, payload, 'utf8');
+    await fsPromises.rename(tmpPath, filePath);
   };
 
   /** Applies a batch and rolls the memory back when the file write fails. */
   const applyBatch = async (ids, archivedAt) => {
     const targets = asIdList(ids);
     if (targets.length === 0) return { applied: [], failedIds: [] };
+    return runExclusive(() => applyBatchExclusive(targets, archivedAt));
+  };
 
+  const applyBatchExclusive = async (targets, archivedAt) => {
     const loadResult = await load();
     if (!loadResult.ok || !writable) {
       return { applied: [], failedIds: targets };

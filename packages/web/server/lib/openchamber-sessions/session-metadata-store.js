@@ -13,10 +13,21 @@
  * a `null` deletes. That is what the old PATCH did, and it is what keeps two
  * features writing into the same `openchamber` namespace from erasing each
  * other — goal mode saving progress must not drop an assist recap.
+ *
+ * A session OpenCode migrated from v1 still carries the metadata v1 wrote onto
+ * its record, and a session created through OpenChamber carries what was set
+ * at create time. This store never saw either, and the proxy overlays the
+ * store per top-level key, so the first write from any feature would replace
+ * the whole `openchamber` namespace with its patch alone. The store therefore
+ * seeds itself from the OpenCode record the first time it touches a session,
+ * inside the same transaction as the read or write that needed it. Every
+ * reader and writer goes through this store, so nobody can skip the seed.
  */
 
 import fsDefault from 'node:fs';
 import pathDefault from 'node:path';
+
+import { createOpenCodeClient as createOpenCodeClientDefault } from './opencode-client.js';
 
 const METADATA_FILE_NAME = 'sessions-metadata.json';
 
@@ -45,15 +56,49 @@ export const mergeMetadataPatch = (current, patch) => {
   return base;
 };
 
+const isSessionNotFound = (error) => error?._tag === 'SessionNotFoundError';
+
+/**
+ * Reads the metadata OpenCode holds for a session: what v1 wrote onto a
+ * migrated record, or what was passed at create time. Resolves `null` when
+ * OpenCode does not know the session, which is a definitive "nothing there".
+ * Any other failure throws, because "could not ask" must not become "empty".
+ */
+export const createUpstreamSessionMetadataReader = ({
+  buildOpenCodeUrl,
+  getOpenCodeAuthHeaders,
+  createOpenCodeClient = createOpenCodeClientDefault,
+}) => async (sessionID, { directory = '' } = {}) => {
+  const client = createOpenCodeClient({
+    baseUrl: buildOpenCodeUrl('/', '').replace(/\/$/, ''),
+    headers: getOpenCodeAuthHeaders(),
+    directory,
+  });
+  let session;
+  try {
+    session = await client.session.get({ sessionID });
+  } catch (error) {
+    if (isSessionNotFound(error)) return null;
+    throw error;
+  }
+  // The 2.x client unwraps the `{ data }` envelope: this is the record itself.
+  return isPlainObject(session?.metadata) ? session.metadata : null;
+};
+
 /**
  * @param {object} options
  * @param {string} options.dataDir OpenChamber data directory for this instance.
+ * @param {(sessionID: string, scope: { directory: string }) => Promise<object | null>} [options.readUpstreamMetadata]
+ *   Seeds a session the store has never held from OpenCode's record. Absent
+ *   means there is nothing to seed from (module tests, or a runtime without an
+ *   OpenCode client).
  * @param {typeof fsDefault.promises} [options.fsPromises]
  * @param {typeof pathDefault} [options.path]
  * @param {() => number} [options.now]
  */
 export const createSessionMetadataStore = ({
   dataDir,
+  readUpstreamMetadata = null,
   fsPromises = fsDefault.promises,
   path = pathDefault,
   now = Date.now,
@@ -62,6 +107,12 @@ export const createSessionMetadataStore = ({
 
   /** sessionID → metadata object. Authoritative once `loaded` is true. */
   const entries = new Map();
+  /**
+   * Sessions whose OpenCode record has been consulted with a definitive
+   * answer. A session in `entries` counts as seeded too; this set only records
+   * the ones where OpenCode had nothing, so they are not asked again.
+   */
+  const seeded = new Set();
   let loaded = false;
   let loadPromise = null;
   /**
@@ -70,7 +121,19 @@ export const createSessionMetadataStore = ({
    * file we could not read would drop exactly the state we are protecting.
    */
   let writable = false;
-  let writeChain = Promise.resolve();
+  /**
+   * One transaction at a time: seed, mutate memory, persist, roll back on
+   * failure. Serializing only the file write is not enough — a rollback that
+   * runs after a later transaction has already committed would erase that
+   * transaction's memory while its bytes stay on disk, and the next write
+   * would then erase the bytes too.
+   */
+  let transactionChain = Promise.resolve();
+  const runExclusive = (work) => {
+    const next = transactionChain.then(work, work);
+    transactionChain = next.then(() => undefined, () => undefined);
+    return next;
+  };
 
   const snapshot = () => Object.fromEntries(entries);
 
@@ -138,58 +201,50 @@ export const createSessionMetadataStore = ({
     return loadPromise;
   };
 
-  const persist = () => {
+  /** Only ever called inside `runExclusive`, so two writes cannot interleave their renames. */
+  const persist = async () => {
     const payload = JSON.stringify(snapshot());
-    const write = async () => {
-      await fsPromises.mkdir(dataDir, { recursive: true });
-      // Temp file in the same directory so the rename is atomic on one device:
-      // a reader sees either the previous file or the complete new one.
-      const tmpPath = `${filePath}.${process.pid}.tmp`;
-      await fsPromises.writeFile(tmpPath, payload, 'utf8');
-      await fsPromises.rename(tmpPath, filePath);
-    };
-    // Serialized so two overlapping writes cannot interleave their renames.
-    const next = writeChain.then(write, write);
-    writeChain = next.catch(() => undefined);
-    return next;
+    await fsPromises.mkdir(dataDir, { recursive: true });
+    // Temp file in the same directory so the rename is atomic on one device:
+    // a reader sees either the previous file or the complete new one.
+    const tmpPath = `${filePath}.${process.pid}.tmp`;
+    await fsPromises.writeFile(tmpPath, payload, 'utf8');
+    await fsPromises.rename(tmpPath, filePath);
   };
 
-  const get = async (sessionID) => {
-    const id = asNonEmptyString(sessionID);
-    if (!id) return {};
-    await load();
-    return entries.get(id) ?? {};
-  };
-
-  /** Whether the store holds anything for the session (an empty object counts as nothing). */
-  const has = async (sessionID) => {
-    const id = asNonEmptyString(sessionID);
-    if (!id) return false;
-    await load();
-    return entries.has(id);
-  };
+  const isSeeded = (id) => entries.has(id) || seeded.has(id);
 
   /**
-   * Applies a merge patch and returns the session's full metadata afterwards.
-   * A failed write rolls the memory back and throws, so a caller never believes
-   * it saved something it did not.
+   * Returns what OpenCode holds for a session the store has never seen, or
+   * `undefined` when there is nothing to fold in. Throws when OpenCode could
+   * not be asked: the caller must not proceed as if the answer were "nothing",
+   * because the first write would then overwrite the record's namespace.
+   * Only ever called inside `runExclusive`.
    */
-  const setSessionMetadata = async (sessionID, patch) => {
-    const id = asNonEmptyString(sessionID);
-    if (!id) throw new Error('a session id is required to store session metadata');
-    if (!isPlainObject(patch)) throw new Error('a session metadata patch must be an object');
+  const readSeed = async (id, directory) => {
+    if (isSeeded(id) || !readUpstreamMetadata) return undefined;
+    const upstream = await readUpstreamMetadata(id, { directory });
+    if (isPlainObject(upstream) && Object.keys(upstream).length > 0) return upstream;
+    seeded.add(id);
+    return undefined;
+  };
 
+  const requireWritable = async () => {
     const loadResult = await load();
     if (!loadResult.ok || !writable) {
       throw new Error('session metadata is unavailable: its file could not be read');
     }
+  };
 
+  /**
+   * Replaces one session's entry, persists, and restores the entry when the
+   * write fails. Only ever called inside `runExclusive`.
+   */
+  const commit = async (id, next) => {
     const had = entries.has(id);
     const previous = entries.get(id);
-    const merged = mergeMetadataPatch(previous, patch);
-    if (Object.keys(merged).length === 0) entries.delete(id);
-    else entries.set(id, merged);
-
+    if (next === undefined || Object.keys(next).length === 0) entries.delete(id);
+    else entries.set(id, next);
     try {
       await persist();
     } catch (error) {
@@ -197,25 +252,65 @@ export const createSessionMetadataStore = ({
       else entries.delete(id);
       throw error;
     }
+  };
 
-    return merged;
+  /**
+   * The session's full metadata. A session the store has never held is seeded
+   * from OpenCode first, and that seed is persisted so the proxy overlay and
+   * later writes see the same record. Throws when the seed could not be read.
+   */
+  const get = async (sessionID, { directory = '' } = {}) => {
+    const id = asNonEmptyString(sessionID);
+    if (!id) return {};
+    await load();
+    if (isSeeded(id)) return entries.get(id) ?? {};
+    return runExclusive(async () => {
+      // Re-checked under the lock: a transaction ahead of us may have seeded it.
+      if (isSeeded(id)) return entries.get(id) ?? {};
+      const seed = await readSeed(id, directory);
+      if (seed === undefined) return {};
+      await requireWritable();
+      await commit(id, seed);
+      return seed;
+    });
+  };
+
+  /**
+   * Applies a merge patch and returns the session's full metadata afterwards.
+   * A failed write rolls the memory back and throws, so a caller never believes
+   * it saved something it did not.
+   */
+  const setSessionMetadata = async (sessionID, patch, { directory = '' } = {}) => {
+    const id = asNonEmptyString(sessionID);
+    if (!id) throw new Error('a session id is required to store session metadata');
+    if (!isPlainObject(patch)) throw new Error('a session metadata patch must be an object');
+
+    return runExclusive(async () => {
+      await requireWritable();
+      // Seeding is part of this write: a failed upstream read stops the write
+      // instead of letting the patch replace what OpenCode still holds.
+      const seed = await readSeed(id, directory);
+      const base = seed ?? entries.get(id);
+      const merged = mergeMetadataPatch(base, patch);
+      await commit(id, merged);
+      return merged;
+    });
   };
 
   const removeSession = async (sessionID) => {
     const id = asNonEmptyString(sessionID);
     if (!id) return false;
-    await load();
-    if (!writable || !entries.has(id)) return false;
-    const previous = entries.get(id);
-    entries.delete(id);
-    try {
-      await persist();
-    } catch (error) {
-      entries.set(id, previous);
-      console.warn('[openchamber-sessions] failed to drop session metadata:', error?.message ?? error);
-      return false;
-    }
-    return true;
+    return runExclusive(async () => {
+      await load();
+      if (!writable || !entries.has(id)) return false;
+      try {
+        await commit(id, undefined);
+      } catch (error) {
+        console.warn('[openchamber-sessions] failed to drop session metadata:', error?.message ?? error);
+        return false;
+      }
+      return true;
+    });
   };
 
   const getAll = async () => {
@@ -229,7 +324,6 @@ export const createSessionMetadataStore = ({
     getAll,
     list: getAll,
     isLoaded: () => loaded,
-    has,
     setSessionMetadata,
     removeSession,
     filePath,

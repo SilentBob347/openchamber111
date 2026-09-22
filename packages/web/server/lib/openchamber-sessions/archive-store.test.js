@@ -154,4 +154,34 @@ describe('createArchiveStore', () => {
     await expect(store.archive(['ses_1'])).resolves.toEqual({ archived: [], failedIds: ['ses_1'] });
     await expect(store.isArchived('ses_1')).resolves.toBe(false);
   });
+
+  it('keeps a later successful batch when an earlier one fails and rolls back', async () => {
+    const dataDir = makeDataDir();
+    let failNext = true;
+    let releaseFailure;
+    const failureReleased = new Promise((resolve) => { releaseFailure = resolve; });
+    const fsPromises = {
+      ...fs.promises,
+      writeFile: async (...args) => {
+        if (failNext) {
+          failNext = false;
+          await failureReleased;
+          throw new Error('disk full');
+        }
+        return fs.promises.writeFile(...args);
+      },
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createArchiveStore({ dataDir, fsPromises, now: () => 1 });
+
+    const failing = store.archive(['ses_1'], 10);
+    const succeeding = store.archive(['ses_1'], 20);
+    releaseFailure();
+
+    await expect(failing).resolves.toEqual({ archived: [], failedIds: ['ses_1'] });
+    await expect(succeeding).resolves.toEqual({ archived: [{ id: 'ses_1', archivedAt: 20 }], failedIds: [] });
+    // The failed batch's rollback must not undo what the later batch committed.
+    await expect(store.archivedAt('ses_1')).resolves.toBe(20);
+    expect(JSON.parse(readFile(dataDir))).toEqual({ ses_1: 20 });
+  });
 });
