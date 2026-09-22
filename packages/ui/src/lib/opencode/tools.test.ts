@@ -92,7 +92,7 @@ describe("tool row description", () => {
     expect(toolDescription("patch", { patchText: "*** Begin" }, { files: [{ file: "src/a.ts" }] }))
       .toEqual({ kind: "path", value: "src/a.ts" })
     expect(toolDescription("patch", {}, { files: [{ file: "a.ts" }, { file: "b.ts" }] }))
-      .toEqual({ kind: "files", count: 2 })
+      .toEqual({ kind: "files", count: 2, files: ["a.ts", "b.ts"] })
   })
 
   test("a patch describes itself from its own text until the tool reports its diffs", () => {
@@ -108,7 +108,8 @@ describe("tool row description", () => {
       "*** End Patch",
     ].join("\n")
     expect(patchInputFiles({ patchText })).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"])
-    expect(toolDescription("patch", { patchText }, undefined)).toEqual({ kind: "files", count: 3 })
+    expect(toolDescription("patch", { patchText }, undefined))
+      .toEqual({ kind: "files", count: 3, files: ["src/a.ts", "src/b.ts", "src/c.ts"] })
     expect(toolDescription("patch", { patchText: "*** Begin Patch\n*** Update File: only.ts\n*** End Patch" }, {}))
       .toEqual({ kind: "path", value: "only.ts" })
     // Reported diffs win over the text once the tool ran.

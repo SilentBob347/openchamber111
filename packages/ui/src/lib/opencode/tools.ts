@@ -295,7 +295,8 @@ export type ToolDescription =
   | { kind: "path"; value: string }
   | { kind: "text"; value: string }
   | { kind: "questions"; count: number }
-  | { kind: "files"; count: number }
+  /** Several files in one call; `files` are the raw paths, `count` their number. */
+  | { kind: "files"; count: number; files: string[] }
   /** An `execute` script, described by the tools it called. */
   | { kind: "tools"; calls: Array<{ name: string; count: number }>; overflow: number }
 
@@ -372,7 +373,7 @@ export function toolDescription(
     case OPENCODE_TOOLS.patch: {
       const reported = toolFileDiffs(metadata).map((file) => file.file)
       const files = reported.length > 0 ? reported : patchInputFiles(input)
-      if (files.length > 1) return { kind: "files", count: files.length }
+      if (files.length > 1) return { kind: "files", count: files.length, files }
       return asPath(files[0])
     }
 
