@@ -336,6 +336,33 @@ describe('runtimeFetch read coalescing', () => {
     }
   });
 
+  test('keeps reads for different directories apart', async () => {
+    const previous = getRuntimeUrlResolver();
+    const seen: string[] = [];
+    try {
+      configureRuntimeUrlResolver({ apiBaseUrl: 'https://api.example' });
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        const directory = new Headers(init?.headers).get('x-opencode-directory') ?? '';
+        seen.push(directory);
+        await new Promise((r) => setTimeout(r, 20));
+        return new Response(JSON.stringify({ directory }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch;
+
+      const [a, b] = await Promise.all([
+        runtimeFetch('/api/config', { headers: { 'x-opencode-directory': encodeURIComponent('/repo/a') } }),
+        runtimeFetch('/api/config', { headers: { 'x-opencode-directory': encodeURIComponent('/repo/b') } }),
+      ]);
+
+      expect(seen).toHaveLength(2);
+      expect(await a.json()).toEqual({ directory: encodeURIComponent('/repo/a') });
+      expect(await b.json()).toEqual({ directory: encodeURIComponent('/repo/b') });
+    } finally {
+      setRuntimeUrlResolver(previous);
+      globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
+
   test('does not coalesce non-GET, non-allowlisted, or signal-bearing requests', async () => {
     const previous = getRuntimeUrlResolver();
     let calls = 0;

@@ -90,6 +90,20 @@ const proxyAbortControllers = new Map<string, AbortController>();
 const COALESCE_READ_PATH = /^\/api\/(config|location|agent|project|command|model|provider)(\b|\/|\?|$)/;
 const READ_COALESCE = new Map<string, Promise<ApiProxyResponsePayload>>();
 
+// Two reads are "identical" only when everything OpenCode sees is identical.
+// On OpenCode 2.x the project directory travels in the `x-opencode-directory`
+// header, not the URL, and the auth headers pick the upstream scope; keying on
+// the URL alone would answer project B's `/api/config` with project A's body.
+// Every forwarded header therefore joins the key, canonicalized so header-name
+// casing cannot split otherwise-identical reads.
+const buildReadCoalesceKey = (targetUrl: string, headers: Record<string, string>): string => {
+  const canonicalHeaders = Object.entries(headers)
+    .map(([name, value]) => `${name.toLowerCase()}=${value}`)
+    .sort()
+    .join('\n');
+  return `GET ${targetUrl}\n${canonicalHeaders}`;
+};
+
 const performApiProxyFetch = async (
   targetUrl: string,
   method: string,
@@ -212,7 +226,9 @@ export async function handleProxyBridgeMessage(
       // AbortController (api:proxy:abort can't cancel these reads), so one
       // caller aborting can't strand the others.
       const coalesceKey =
-        normalizedMethod === 'GET' && COALESCE_READ_PATH.test(normalizedPath) ? `GET ${targetUrl}` : null;
+        normalizedMethod === 'GET' && COALESCE_READ_PATH.test(normalizedPath)
+          ? buildReadCoalesceKey(targetUrl, requestHeaders)
+          : null;
       if (coalesceKey) {
         const existing = READ_COALESCE.get(coalesceKey);
         if (existing) {
