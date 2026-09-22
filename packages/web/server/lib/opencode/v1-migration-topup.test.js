@@ -226,27 +226,14 @@ describe.skipIf(!sqlite)('topUpV1Migration', () => {
     });
   });
 
-  it('does not resurrect a session that was deleted in v2', () => {
-    // Created before the migration completed, so the migration walked it; its
-    // absence from session_v2 now means the user deleted it in v2.
-    createDatabase();
-    seed({ v1: [{ id: 'ses_a', timeCreated: COMPLETED_AT - 1 }, { id: 'ses_b', timeCreated: COMPLETED_AT - 1 }] });
-    expect(run()).toEqual({ status: 'skipped', missing: 0, revisited: 0, reason: 'nothing-missing' });
-    expect(readMigrationRow().state).toEqual({ phase: 'completed' });
-  });
-
-  it('refuses when the cursor for a missing session would pass over a deleted one', () => {
+  it('imports a session deleted in v2 again rather than leaving newer 1.x sessions behind', () => {
+    // ses_a was walked by the migration and deleted in v2 (only the legacy row
+    // is left); ses_d was created after. The maintainer chose to bring ses_a
+    // back over losing ses_d: deleting again is cheap, a lost session is not.
     createDatabase();
     seed({ v1: [{ id: 'ses_a', timeCreated: COMPLETED_AT - 1 }, 'ses_d'] });
-    expect(run()).toEqual({ status: 'unsafe', missing: 1, revisited: 0, reason: 'deleted-sessions-would-return' });
-    expect(readMigrationRow().state).toEqual({ phase: 'completed' });
-  });
-
-  it('schedules when the deleted session sorts above the cursor and stays out of reach', () => {
-    createDatabase();
-    seed({ v1: ['ses_b', { id: 'ses_z', timeCreated: COMPLETED_AT - 1 }] });
-    expect(run()).toEqual({ status: 'scheduled', missing: 1, revisited: 0 });
-    expect(readMigrationRow().state).toEqual({ phase: 'sessions', cursor: computeResumeCursor('ses_b') });
+    expect(run()).toEqual({ status: 'scheduled', missing: 2, revisited: 0 });
+    expect(readMigrationRow().state).toEqual({ phase: 'sessions', cursor: computeResumeCursor('ses_d') });
   });
 
   it('never touches the durable event log', () => {
