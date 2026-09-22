@@ -24,7 +24,9 @@ const PERMISSION_DECISION_TTL_MS = 15 * 60 * 1000;
 
 const errorMessage = (error) => (error instanceof Error ? error.message : String(error));
 
-const commandBodySchema = z.object({ command: z.string(), arguments: z.string().nullish() });
+// v2's command body (`session.command` in the protocol) names the command in
+// `name` and carries its arguments in `text`; a prompt body has no `name`.
+const commandBodySchema = z.object({ name: z.string().trim().min(1), text: z.string().nullish() });
 // v2 sends one user turn as flat text; the context the composer attached went
 // ahead of it as synthetic messages, which are never the request being routed.
 const promptBodySchema = z.object({ text: z.string().nullish() });
@@ -33,8 +35,8 @@ const promptBodySchema = z.object({ text: z.string().nullish() });
 export const requestTextOf = (body) => {
   const command = commandBodySchema.safeParse(body);
   if (command.success) {
-    const args = command.data.arguments?.trim();
-    return `/${command.data.command}${args ? ` ${args}` : ''}`;
+    const args = command.data.text?.trim();
+    return `/${command.data.name}${args ? ` ${args}` : ''}`;
   }
   const prompt = promptBodySchema.safeParse(body);
   return (prompt.success ? prompt.data.text ?? '' : '').trim();

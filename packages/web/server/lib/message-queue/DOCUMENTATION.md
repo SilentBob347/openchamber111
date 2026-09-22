@@ -115,19 +115,21 @@ persisted "sending" flag would strand a message forever.
    agent are switched onto the session first (`POST /session/:id/model`,
    `/agent`), because v2 holds both on the session rather than in the body; a
    captured `openchamber/auto` is resolved into a real pair by the routing
-   runtime beforehand. Then:
+   runtime beforehand. Then the captured context goes ahead as synthetic
+   messages (`POST /session/:id/synthetic` with `resume: false`, an attached
+   item's metadata riding along), followed by pending project knowledge
+   (`sessionKnowledgeRuntime.resolvePendingForSession`, recorded as delivered
+   only after the send is accepted), and then the message itself:
    - text starting with `/` that names a command in OpenCode's `/command`
-     list (skills included) and carries no captured context goes to
-     `POST /session/:id/command` (body field `name` since OpenCode 2.0.8)
-     with its arguments and file attachments. That
-     route takes files only, so a command queued **with** context takes the
-     prompt route instead, the same rule the composer applies;
-   - otherwise the captured context goes ahead as synthetic messages
-     (`POST /session/:id/synthetic`, an attached item's metadata riding along),
-     followed by pending project knowledge
-     (`sessionKnowledgeRuntime.resolvePendingForSession`, recorded as delivered
-     only after the prompt is accepted), and then
-     `POST /session/:id/prompt` with the user's text, files and agent mention.
+     list (skills included) goes to `POST /session/:id/command` (body fields
+     `name` and `text` since OpenCode 2.0.8) with its file attachments. The
+     command route takes files only, which is why the context went ahead of
+     it; sending "/name args" as a prompt instead would skip the template
+     OpenCode expands only on that route. The command lookup runs before
+     anything is admitted, so a failed lookup fails the send without leaving
+     context behind for the retry to duplicate;
+   - otherwise `POST /session/:id/prompt` with the user's text, files and
+     agent mention.
    Success removes the item, persists, broadcasts, and marks the user
    message sent for notifications. Failure keeps the item, backs off
    2 s → 60 s (doubling per consecutive failure of that item), and re-arms.

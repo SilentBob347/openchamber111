@@ -1021,7 +1021,7 @@ describe('routeMessage skill invocation', () => {
     expect(sendCommandCalls[0].arguments).toBe('focus on auth');
   });
 
-  test('preserves context parts and skill invocation on the prompt route', async () => {
+  test('keeps a skill invocation on the command route with its context going ahead of it', async () => {
     useSkillsStore.setState({
       skillsByDirectory: { '/skills/project': [{ name: 'grill-with-docs', path: '/skills/grill-with-docs/SKILL.md', scope: 'user', source: 'opencode' }] },
     });
@@ -1036,7 +1036,7 @@ describe('routeMessage skill invocation', () => {
       text: 'check this',
     })];
 
-    await routeMessage({
+    const route = await routeMessage({
       sessionId: 'session-skill',
       directory: '/skills/project',
       content: '/grill-with-docs focus on auth',
@@ -1045,41 +1045,54 @@ describe('routeMessage skill invocation', () => {
       additionalParts,
     });
 
-    expect(sendCommandCalls).toHaveLength(0);
-    expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].context[0]).toEqual({ text: additionalParts[0].text, metadata: additionalParts[0].metadata });
-    expect(sendMessageCalls[0].context[1].text).toContain('grill-with-docs skill');
+    expect(route).toBe('command');
+    expect(sendMessageCalls).toHaveLength(0);
+    expect(sendCommandCalls).toHaveLength(1);
+    expect(sendCommandCalls[0].command).toBe('grill-with-docs');
+    expect(sendCommandCalls[0].arguments).toBe('focus on auth');
+    expect(sendCommandCalls[0].context).toEqual([{ text: additionalParts[0].text, metadata: additionalParts[0].metadata }]);
   });
 
-  test('keeps a contextual command invocation as typed on the prompt route', async () => {
+  test('a command with a quoted selection still runs as a command', async () => {
+    // Sending "/inspect auth flow" as a prompt would skip the template OpenCode
+    // 2.x expands only on the command route. The selection travels as a
+    // synthetic message the client admits before the command, and any file it
+    // brought rides with the command.
     useCommandsStore.setState({
       commandsByDirectory: { '/skills/project': [{ name: 'inspect', template: 'Inspect $ARGUMENTS carefully.' }] },
     });
+    const contextFile = { type: 'file', mime: 'text/plain', url: 'data:text/plain,hi', filename: 'f.txt' };
+    const part = createContextPart({
+      kind: 'code-comment',
+      source: 'file',
+      fileLabel: 'src/auth.ts',
+      startLine: 4,
+      endLine: 4,
+      language: 'ts',
+      code: 'auth();',
+      text: 'check this',
+    });
 
-    await routeMessage({
+    const route = await routeMessage({
       sessionId: 'session-command',
       directory: '/skills/project',
       content: '/inspect auth flow',
       providerID: 'provider-a',
       modelID: 'model-a',
-      additionalParts: [createContextPart({
-        kind: 'code-comment',
-        source: 'file',
-        fileLabel: 'src/auth.ts',
-        startLine: 4,
-        endLine: 4,
-        language: 'ts',
-        code: 'auth();',
-        text: 'check this',
-      })],
+      additionalParts: [{ ...part, files: [contextFile] }],
     });
 
-    expect(sendCommandCalls).toHaveLength(0);
-    expect(sendMessageCalls).toHaveLength(1);
-    // OpenCode 2.x does not expose command templates over HTTP; the server
-    // expands the invocation, so the prompt travels as typed.
-    expect(sendMessageCalls[0].text).toBe('/inspect auth flow');
-    expect(sendMessageCalls[0].context[0].metadata.openchamberContext.kind).toBe('code-comment');
+    expect(route).toBe('command');
+    expect(sendMessageCalls).toHaveLength(0);
+    expect(sendCommandCalls).toHaveLength(1);
+    expect(sendCommandCalls[0]).toMatchObject({
+      id: 'session-command',
+      directory: '/skills/project',
+      command: 'inspect',
+      arguments: 'auth flow',
+      files: [contextFile],
+    });
+    expect(sendCommandCalls[0].context[0].metadata.openchamberContext.kind).toBe('code-comment');
   });
 
   test('keeps session.command when the only extra part is pinned knowledge', async () => {
@@ -1099,6 +1112,8 @@ describe('routeMessage skill invocation', () => {
     expect(sendCommandCalls).toHaveLength(1);
     expect(sendCommandCalls[0].command).toBe('grill-with-docs');
     expect(sendCommandCalls[0].arguments).toBe('focus on auth');
+    // Knowledge is delivered ahead of the command, not silently dropped.
+    expect(sendCommandCalls[0].context).toEqual([{ text: 'Pinned project knowledge', metadata: undefined }]);
     expect(sendMessageCalls).toHaveLength(0);
     expect(route).toBe('command');
   });
@@ -1130,7 +1145,7 @@ describe('routeMessage skill invocation', () => {
     expect(sendMessageCalls).toHaveLength(0);
   });
 
-  test('keeps unmarked synthetic instructions on the prompt route', async () => {
+  test('carries unmarked synthetic instructions ahead of the command', async () => {
     useSkillsStore.setState({
       skillsByDirectory: { '/skills/project': [{ name: 'grill-with-docs', path: '/skills/grill-with-docs/SKILL.md', scope: 'user', source: 'opencode' }] },
     });
@@ -1145,10 +1160,26 @@ describe('routeMessage skill invocation', () => {
       additionalParts: instructions,
     });
 
+    expect(route).toBe('command');
+    expect(sendMessageCalls).toHaveLength(0);
+    expect(sendCommandCalls).toHaveLength(1);
+    expect(sendCommandCalls[0].context[0].text).toBe(instructions[0].text);
+  });
+
+  test('an unknown slash name with context stays a prompt, context included', async () => {
+    const route = await routeMessage({
+      sessionId: 'session-skill',
+      directory: '/skills/project',
+      content: '/nothing here',
+      providerID: 'provider-a',
+      modelID: 'model-a',
+      additionalParts: [{ text: 'quoted selection', synthetic: true }],
+    });
+
     expect(route).toBe('prompt');
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].context[0].text).toBe(instructions[0].text);
+    expect(sendMessageCalls[0]).toMatchObject({ text: '/nothing here', context: [{ text: 'quoted selection' }] });
   });
 
   test('sends an unknown slash token as a plain message after live discovery finds nothing', async () => {
@@ -1167,9 +1198,8 @@ describe('routeMessage skill invocation', () => {
 
   test('matches the command cached for the session directory without a live lookup', async () => {
     // A root project and its worktree can both define `inspect`. The command
-    // must be recognised from the session's own directory. OpenCode 2.x serves
-    // no templates, so the prompt route sends the invocation as typed; what
-    // this asserts is that the match happened locally and stayed a prompt.
+    // must be recognised from the session's own directory; what this asserts
+    // is that the match happened locally and ran as a command.
     useCommandsStore.setState({
       commandsByDirectory: {
         '/repo': [{ name: 'inspect' }],
@@ -1187,9 +1217,9 @@ describe('routeMessage skill invocation', () => {
     });
 
     expect(liveLookupCalls).toEqual([]);
-    expect(sendCommandCalls).toHaveLength(0);
-    expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].text).toBe('/inspect auth flow');
+    expect(sendMessageCalls).toHaveLength(0);
+    expect(sendCommandCalls).toHaveLength(1);
+    expect(sendCommandCalls[0]).toMatchObject({ command: 'inspect', arguments: 'auth flow', directory: '/repo/worktree' });
   });
 
   test('does not match a skill or command cached for a different directory', async () => {
@@ -1259,6 +1289,7 @@ describe('routeMessage skill invocation', () => {
 
 describe('goal objective directory scoping', () => {
   let originalSendMessage;
+  let originalSendCommand;
   let originalGetSession;
   let originalUpdateSession;
   let originalFetch;
@@ -1293,10 +1324,12 @@ describe('goal objective directory scoping', () => {
     useSessionGoalArmStore.getState().setArmed(true, null);
 
     originalSendMessage = opencodeClient.sendMessage;
+    originalSendCommand = opencodeClient.sendCommand;
     originalGetSession = opencodeClient.getSession;
     originalUpdateSession = opencodeClient.updateSession;
     originalFetch = globalThis.fetch;
     opencodeClient.sendMessage = async () => 'msg';
+    opencodeClient.sendCommand = async () => {};
     opencodeClient.getSession = async () => ({ id: 'session-worktree', metadata: {} });
     opencodeClient.updateSession = async (sessionId, patch, directory) => {
       metadataWrites.push({ sessionId, patch, directory });
@@ -1317,6 +1350,7 @@ describe('goal objective directory scoping', () => {
 
   afterEach(() => {
     opencodeClient.sendMessage = originalSendMessage;
+    opencodeClient.sendCommand = originalSendCommand;
     opencodeClient.getSession = originalGetSession;
     opencodeClient.updateSession = originalUpdateSession;
     globalThis.fetch = originalFetch;

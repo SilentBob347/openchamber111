@@ -188,8 +188,14 @@ export async function routeMessage(params: {
     variant: params.variant,
     agent: params.agent,
   })
-  const promptContent = params.content
-  let promptAdditionalParts = params.additionalParts
+  // A context item becomes a synthetic message, which carries text only. Any
+  // file it brought rides with the send so the attachment still arrives.
+  const contextItems = (params.additionalParts ?? [])
+    .filter((part) => part.text.trim().length > 0)
+    .map((part) => ({ text: part.text, metadata: part.metadata }))
+  const contextFiles = (params.additionalParts ?? []).flatMap((part) => part.files ?? [])
+  const sendFiles = [...(params.files ?? []), ...contextFiles]
+
   if (params.inputMode === "shell") {
     await opencodeClient.shellSession({
       runtimeKey: params.runtimeKey,
@@ -229,63 +235,39 @@ export async function routeMessage(params: {
     }
 
     if (matchedCommand || matchedSkill) {
-      // Pinned project knowledge is the only additional part that does not
-      // change command semantics. Other synthetic parts may carry prepared
-      // user work (for example conflict instructions) and must not be dropped.
-      const additionalPartsRequirePrompt = params.additionalParts?.some((part) => (
-        part.systemContext !== 'session-knowledge'
-      )) ?? false
-      if (!additionalPartsRequirePrompt) {
-        // `session.command` assigns the message id itself, so there is no id to
-        // hang an optimistic user message on. The command's message arrives
-        // through the stream instead.
-        params.appendSubmissions?.()
-        await opencodeClient.sendCommand({
-          runtimeKey: params.runtimeKey,
-          id: params.sessionId,
-          model: selection.model,
-          agent: selection.agent,
-          command: cmdName,
-          arguments: tail.join(" "),
-          files: params.files,
-          delivery: params.delivery,
-          directory: requestDirectory,
-        })
-        return 'command'
-      }
-
-      // `session.command` accepts file parts only, so a turn carrying
-      // structured context takes the prompt route. OpenCode 2.x no longer
-      // exposes command templates over HTTP, so the invocation travels as the
-      // user typed it; a skill keeps its semantics through an explicit
-      // context instruction.
-      if (matchedSkill) {
-        promptAdditionalParts = [
-          ...(params.additionalParts ?? []),
-          {
-            text: `The user explicitly invoked the ${cmdName} skill. Use the corresponding skill tool to handle this request.`,
-            synthetic: true,
-          },
-        ]
-      }
+      // The command route takes files only, so attached context (a quoted
+      // selection, pinned knowledge, prepared conflict instructions) is
+      // admitted ahead of it as synthetic messages. Sending "/name args" as
+      // a prompt instead would skip the command's template entirely: OpenCode
+      // 2.x expands it only on the command route.
+      //
+      // `session.command` assigns the message id itself, so there is no id to
+      // hang an optimistic user message on. The command's message arrives
+      // through the stream instead.
+      params.appendSubmissions?.()
+      await opencodeClient.sendCommand({
+        runtimeKey: params.runtimeKey,
+        id: params.sessionId,
+        model: selection.model,
+        agent: selection.agent,
+        command: cmdName,
+        arguments: tail.join(" "),
+        files: sendFiles,
+        context: contextItems.length > 0 ? contextItems : undefined,
+        delivery: params.delivery,
+        directory: requestDirectory,
+      })
+      return 'command'
     }
   }
 
   // Normal prompt — optimistic insert so message appears instantly
-  // A context item becomes a synthetic message, which carries text only. Any
-  // file it brought rides with the prompt so the attachment still arrives.
-  const contextItems = (promptAdditionalParts ?? [])
-    .filter((part) => part.text.trim().length > 0)
-    .map((part) => ({ text: part.text, metadata: part.metadata }))
-  const contextFiles = (promptAdditionalParts ?? []).flatMap((part) => part.files ?? [])
-  const promptFiles = [...(params.files ?? []), ...contextFiles]
-
   await optimisticSend({
     runtimeKey: params.runtimeKey,
     sessionId: params.sessionId,
     content: params.content,
     directory: requestDirectory,
-    files: promptFiles,
+    files: sendFiles,
     appendSubmissions: params.appendSubmissions,
     send: (messageID) => opencodeClient.sendMessage({
       runtimeKey: params.runtimeKey,
@@ -293,9 +275,9 @@ export async function routeMessage(params: {
       providerID: params.providerID,
       model: selection.model,
       agent: selection.agent,
-      text: promptContent,
+      text: params.content,
       agentMentions: params.agentMentionName ? [{ name: params.agentMentionName }] : undefined,
-      files: promptFiles,
+      files: sendFiles,
       context: contextItems.length > 0 ? contextItems : undefined,
       delivery: params.delivery,
       messageId: messageID,
@@ -1815,7 +1797,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       })
       // Recorded only after the send resolves: a failed send must carry the
       // pinned context again rather than assume the agent already saw it.
-      if (draftKnowledge.text && messageRoute === 'prompt') {
+      if (draftKnowledge.text && messageRoute !== 'shell') {
         void reportSessionKnowledgeDelivered(
           createdDraftSession.directory,
           createdDraftSession.sessionId,
@@ -1933,7 +1915,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         })),
       })),
     })
-    if (knowledge.text && messageRoute === 'prompt') {
+    if (knowledge.text && messageRoute !== 'shell') {
       void reportSessionKnowledgeDelivered(currentSessionDirectory, targetSessionId || "", knowledge.signature)
     }
   },

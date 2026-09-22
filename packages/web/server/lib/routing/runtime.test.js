@@ -43,8 +43,12 @@ describe('requestTextOf', () => {
   it('reads the prompt text a v2 send carries', () => {
     expect(requestTextOf({ text: '  fix the typo in README  ', files: [{ uri: 'data:...' }] })).toBe('fix the typo in README');
   });
-  it('renders a slash command with its arguments', () => {
-    expect(requestTextOf({ command: 'review', arguments: ' 3650 ' })).toBe('/review 3650');
+  it('renders a v2 command body (`name` plus `text`) as the slash command', () => {
+    expect(requestTextOf({ name: 'review', text: ' src ' })).toBe('/review src');
+  });
+  it('keeps the command name when it has no arguments', () => {
+    expect(requestTextOf({ name: 'review', text: '' })).toBe('/review');
+    expect(requestTextOf({ name: 'review' })).toBe('/review');
   });
 });
 

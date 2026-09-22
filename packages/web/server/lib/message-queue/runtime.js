@@ -508,26 +508,11 @@ export function createMessageQueueRuntime({
       });
     }
 
-    // OpenCode's command route takes file attachments only, so a command queued
-    // with captured context cannot go through it. Same rule as the composer:
-    // without context the command route keeps its semantics; with context the
-    // prompt route carries the text together with the context.
+    // Resolved before anything is admitted: a failed command lookup fails the
+    // whole send, so a retry does not admit the context twice.
     const command = await resolveSlashCommand(item.text, directory);
-    if (command && contextMessages.length === 0) {
-      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/command`, {
-        directory,
-        method: 'POST',
-        body: {
-          // OpenCode 2.0.8 renamed the command body field `command` to `name`.
-          name: command.name,
-          text: command.arguments,
-          ...(promptFiles.length > 0 ? { files: promptFiles } : {}),
-        },
-      });
-      return;
-    }
 
-    // Standing project context rides the prompt exactly as a UI send would
+    // Standing project context rides the send exactly as a UI send would
     // attach it; a failed lookup sends without it rather than not at all.
     const knowledge = sessionKnowledgeRuntime
       ? await sessionKnowledgeRuntime.resolvePendingForSession(sessionId, directory)
@@ -535,7 +520,10 @@ export function createMessageQueueRuntime({
       : { text: '', signature: '' };
 
     // Same order as a UI send: everything attached to the message is admitted
-    // before the message itself, so the model reads it as background.
+    // before the message itself, so the model reads it as background. This
+    // holds for a command too: its route takes file attachments only, and
+    // sending "/name args" as a prompt instead would skip the template
+    // OpenCode 2.x expands only on the command route.
     const preamble = [...contextMessages];
     if (knowledge.text) preamble.push({ text: knowledge.text, resume: false });
     for (const synthetic of preamble) {
@@ -546,17 +534,30 @@ export function createMessageQueueRuntime({
       });
     }
 
-    await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/prompt`, {
-      directory,
-      method: 'POST',
-      body: {
-        text: item.text,
-        ...(promptFiles.length > 0 ? { files: promptFiles } : {}),
-        ...(item.agentMention ? { agents: [{ name: item.agentMention }] } : {}),
-      },
-    });
+    if (command) {
+      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/command`, {
+        directory,
+        method: 'POST',
+        body: {
+          // OpenCode 2.0.8 renamed the command body field `command` to `name`.
+          name: command.name,
+          text: command.arguments,
+          ...(promptFiles.length > 0 ? { files: promptFiles } : {}),
+        },
+      });
+    } else {
+      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/prompt`, {
+        directory,
+        method: 'POST',
+        body: {
+          text: item.text,
+          ...(promptFiles.length > 0 ? { files: promptFiles } : {}),
+          ...(item.agentMention ? { agents: [{ name: item.agentMention }] } : {}),
+        },
+      });
+    }
     if (knowledge.text && sessionKnowledgeRuntime) {
-      // After the prompt is accepted, so a rejected dispatch carries it again.
+      // After the send is accepted, so a rejected dispatch carries it again.
       await sessionKnowledgeRuntime.recordDelivered(sessionId, directory, knowledge.signature).catch(() => undefined);
     }
   };

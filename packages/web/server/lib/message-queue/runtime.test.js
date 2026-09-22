@@ -517,10 +517,10 @@ describe('message queue runtime', () => {
     });
   });
 
-  it('sends a command queued with context through the prompt route, context included', async () => {
-    // The command route takes attachments only, so a command with captured
-    // context takes the prompt route. v2 no longer publishes a command's
-    // template, so the typed text is what goes out and OpenCode expands it.
+  it('admits captured context as synthetic messages and still runs a queued command through the command route', async () => {
+    // The command route takes attachments only, so the context goes ahead as
+    // synthetic messages; the command itself keeps its route, because sending
+    // "/review ..." as a prompt would skip the template OpenCode expands there.
     const { runtime, openCode, emit } = createRuntime();
     runtime.start();
     openCode.state.commands = [{ name: 'review', description: 'Review' }];
@@ -535,10 +535,47 @@ describe('message queue runtime', () => {
 
     expect(openCode.state.sent.map((entry) => entry.path)).toEqual([
       `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/prompt`,
+      `/api/session/${SESSION}/command`,
     ]);
     expect(openCode.state.sent[0].body).toEqual({ text: 'quoted', resume: false, metadata });
-    expect(openCode.state.sent[1].body).toEqual({ text: '/review src "error handling"' });
+    expect(openCode.state.sent[1].body).toEqual({ name: 'review', text: 'src "error handling"' });
+  });
+
+  it('delivers pending project knowledge ahead of a queued command and records it', async () => {
+    const recorded = [];
+    const knowledge = {
+      resolvePendingForSession: async () => ({ text: 'pinned notes', signature: 'sig-1' }),
+      recordDelivered: async (sessionId, directory, signature) => { recorded.push({ sessionId, directory, signature }); },
+    };
+    const { runtime, openCode, emit } = createRuntime({ knowledge });
+    runtime.start();
+    openCode.state.commands = [{ name: 'review' }];
+    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review', text: '/review' }));
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+
+    expect(openCode.state.sent.map((entry) => entry.path)).toEqual([
+      `/api/session/${SESSION}/synthetic`,
+      `/api/session/${SESSION}/command`,
+    ]);
+    expect(openCode.state.sent[0].body).toEqual({ text: 'pinned notes', resume: false });
+    expect(recorded).toEqual([{ sessionId: SESSION, directory: DIRECTORY, signature: 'sig-1' }]);
+  });
+
+  it('admits nothing when the command lookup fails, so a retry cannot duplicate the context', async () => {
+    const { runtime, openCode, emit } = createRuntime();
+    runtime.start();
+    openCode.state.failNext = /^\/api\/command$/;
+    await runtime.enqueue(SESSION, DIRECTORY, item({
+      content: '/review',
+      text: '/review',
+      context: [{ kind: 'context', text: 'quoted', metadata: {} }],
+    }));
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+
+    expect(openCode.state.sent).toEqual([]);
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
   });
 
   it('keeps captured context out of snapshots and broadcasts, and hands it back on take', async () => {
