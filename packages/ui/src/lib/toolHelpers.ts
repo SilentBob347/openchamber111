@@ -1,3 +1,4 @@
+import { normalizeToolName } from '@/lib/opencode/tools';
 import {
   isEditTool,
   isPatchTool,
@@ -83,8 +84,9 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
     outputLanguage: 'text',
     inputFields: [
       { key: 'command', label: 'Command', type: 'command', language: 'bash' },
-      { key: 'workdir', label: 'Working Directory', type: 'file' },
-      { key: 'timeout', label: 'Timeout (ms)', type: 'text' }
+      { key: 'description', label: 'Description', type: 'text' },
+      { key: 'timeout', label: 'Timeout (ms)', type: 'text' },
+      { key: 'background', label: 'Background', type: 'text' }
     ]
   },
 
@@ -95,7 +97,9 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
     inputFields: [
       { key: 'pattern', label: 'Pattern', type: 'pattern' },
       { key: 'path', label: 'Directory', type: 'file' },
-      { key: 'include', label: 'Include Pattern', type: 'pattern' }
+      { key: 'include', label: 'Include Pattern', type: 'pattern' },
+      { key: 'literal', label: 'Literal Match', type: 'text' },
+      { key: 'caseSensitive', label: 'Case Sensitive', type: 'text' }
     ]
   },
   glob: {
@@ -154,7 +158,35 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
      category: 'ai',
      outputLanguage: 'markdown',
      inputFields: [
-       { key: 'name', label: 'Skill Name', type: 'text' }
+       { key: 'id', label: 'Skill', type: 'text' }
+     ]
+   },
+   // The `opencode` namespace: OpenCode managing itself.
+   session_rename: {
+     displayName: 'Rename Session',
+     category: 'system',
+     outputLanguage: 'json',
+     inputFields: [
+       { key: 'title', label: 'Title', type: 'text' },
+       { key: 'sessionID', label: 'Session', type: 'text' }
+     ]
+   },
+   session_move: {
+     displayName: 'Move Session',
+     category: 'system',
+     outputLanguage: 'json',
+     inputFields: [
+       { key: 'directory', label: 'Directory', type: 'file' },
+       { key: 'sessionID', label: 'Session', type: 'text' }
+     ]
+   },
+   models: {
+     displayName: 'Search Models',
+     category: 'system',
+     outputLanguage: 'json',
+     inputFields: [
+       { key: 'search', label: 'Search', type: 'text' },
+       { key: 'provider', label: 'Provider', type: 'text' }
      ]
    },
     question: {
@@ -225,7 +257,8 @@ function formatUnknownToolDisplayName(toolName: string): string {
 }
 
 export function getToolMetadata(toolName: string): ToolMetadata {
-  return TOOL_METADATA[toolName] || {
+  // Namespaced tools (`opencode.session_rename`) are keyed by their last segment.
+  return TOOL_METADATA[toolName] || TOOL_METADATA[normalizeToolName(toolName)] || {
     displayName: formatUnknownToolDisplayName(toolName),
     category: 'system',
     outputLanguage: 'text',

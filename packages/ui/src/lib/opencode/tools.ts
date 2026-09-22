@@ -37,6 +37,11 @@ export const OPENCODE_TOOLS = {
   webfetch: "webfetch",
   websearch: "websearch",
   write: "write",
+  // The `opencode` namespace: tools that manage OpenCode itself. On the wire
+  // they arrive as `opencode.<name>`; `normalizeToolName` keeps the last segment.
+  sessionRename: "session_rename",
+  sessionMove: "session_move",
+  models: "models",
 } as const
 
 type OpencodeToolName = (typeof OPENCODE_TOOLS)[keyof typeof OPENCODE_TOOLS]
@@ -123,6 +128,14 @@ const inputSchema = z
     description: optionalText,
     agent: optionalText,
     name: optionalText,
+    // `skill` names the skill by `id`; `session_rename` carries `title`,
+    // `session_move` a `directory`, `models` a `search` and a `provider`.
+    id: optionalText,
+    title: optionalText,
+    directory: optionalText,
+    search: optionalText,
+    provider: optionalText,
+    patchText: optionalText,
     pattern: optionalText,
     query: optionalText,
     url: optionalText,
@@ -296,6 +309,25 @@ const text = (value: string | undefined): ToolDescription | null =>
 
 const asPath = (value: string | undefined): ToolDescription | null => (value ? { kind: "path", value } : null)
 
+const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/
+
+/**
+ * The files a `patch` call names in its own text (`*** Add File: path` and
+ * friends), so the row can describe the call before the tool reports its
+ * diffs and when a run ends without them.
+ */
+export function patchInputFiles(input: ToolInput | undefined): string[] {
+  const patchText = readInput(input).patchText
+  if (!patchText) return []
+  const files: string[] = []
+  for (const line of patchText.split("\n")) {
+    const match = PATCH_HEADER.exec(line.trim())
+    const file = match?.[1]?.trim()
+    if (file && !files.includes(file)) files.push(file)
+  }
+  return files
+}
+
 /**
  * The tools an `execute` script called, deduplicated in first-seen order with
  * a repeat count, capped so a long script still fits one row. While the script
@@ -338,9 +370,10 @@ export function toolDescription(
       return text(parsed.description) ?? text(parsed.agent)
 
     case OPENCODE_TOOLS.patch: {
-      const files = toolFileDiffs(metadata)
+      const reported = toolFileDiffs(metadata).map((file) => file.file)
+      const files = reported.length > 0 ? reported : patchInputFiles(input)
       if (files.length > 1) return { kind: "files", count: files.length }
-      return asPath(files[0]?.file)
+      return asPath(files[0])
     }
 
     case OPENCODE_TOOLS.edit:
@@ -359,7 +392,16 @@ export function toolDescription(
       return text(parsed.query)
 
     case OPENCODE_TOOLS.skill:
-      return text(parsed.name) ?? text(metadataSchema.parse(metadata ?? {}).name)
+      return text(metadataSchema.parse(metadata ?? {}).name) ?? text(parsed.name) ?? text(parsed.id)
+
+    case OPENCODE_TOOLS.sessionRename:
+      return text(parsed.title)
+
+    case OPENCODE_TOOLS.sessionMove:
+      return asPath(parsed.directory)
+
+    case OPENCODE_TOOLS.models:
+      return text(parsed.search) ?? text(parsed.provider)
 
     case OPENCODE_TOOLS.question: {
       const count = parsed.questions?.length ?? 0

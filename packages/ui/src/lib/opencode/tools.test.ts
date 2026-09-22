@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  patchInputFiles,
   blocksOnForm,
   carriesFileDiffs,
   executeOutputTruncation,
@@ -92,6 +93,40 @@ describe("tool row description", () => {
       .toEqual({ kind: "path", value: "src/a.ts" })
     expect(toolDescription("patch", {}, { files: [{ file: "a.ts" }, { file: "b.ts" }] }))
       .toEqual({ kind: "files", count: 2 })
+  })
+
+  test("a patch describes itself from its own text until the tool reports its diffs", () => {
+    const patchText = [
+      "*** Begin Patch",
+      "*** Update File: src/a.ts",
+      "@@",
+      "-old",
+      "+new",
+      "*** Add File: src/b.ts",
+      "+hello",
+      "*** Delete File: src/c.ts",
+      "*** End Patch",
+    ].join("\n")
+    expect(patchInputFiles({ patchText })).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"])
+    expect(toolDescription("patch", { patchText }, undefined)).toEqual({ kind: "files", count: 3 })
+    expect(toolDescription("patch", { patchText: "*** Begin Patch\n*** Update File: only.ts\n*** End Patch" }, {}))
+      .toEqual({ kind: "path", value: "only.ts" })
+    // Reported diffs win over the text once the tool ran.
+    expect(toolDescription("patch", { patchText }, { files: [{ file: "src/a.ts" }] }))
+      .toEqual({ kind: "path", value: "src/a.ts" })
+  })
+
+  test("the opencode namespace tools and skill describe their own input", () => {
+    expect(toolDescription("skill", { id: "writing-for-agents" }, undefined))
+      .toEqual({ kind: "text", value: "writing-for-agents" })
+    expect(toolDescription("opencode.session_rename", { title: "Fix the dock" }, undefined))
+      .toEqual({ kind: "text", value: "Fix the dock" })
+    expect(toolDescription("opencode.session_move", { directory: "~/projects/app" }, undefined))
+      .toEqual({ kind: "path", value: "~/projects/app" })
+    expect(toolDescription("opencode.models", { search: "haiku" }, undefined))
+      .toEqual({ kind: "text", value: "haiku" })
+    expect(toolDescription("opencode.models", { provider: "anthropic" }, undefined))
+      .toEqual({ kind: "text", value: "anthropic" })
   })
 
   test("search and web tools show what they looked for", () => {
