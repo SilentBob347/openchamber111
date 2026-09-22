@@ -21,6 +21,14 @@
  *    seen v2 activity. Every visited session gets its `session_message` rows
  *    deleted and replaced by the V1 transform, so a migrated session that was
  *    continued in v2 would lose that conversation.
+ * 3. NEVER resurrect a session the user deleted in v2. A v2 delete removes the
+ *    `session_v2` row (and, through `bus.remove`, every durable event of that
+ *    session) but leaves the legacy `session` row behind, so "absent from
+ *    `session_v2`" alone does not mean "never imported". The only signal left
+ *    is time: a legacy session created before the migration completed was
+ *    walked by that migration, so its absence now means it was deleted; one
+ *    created after the migration completed was never imported. Deleted
+ *    sessions that would fall under the cursor make the top-up refuse.
  *
  * The loop OpenCode runs is `SELECT id FROM session WHERE id < cursor ORDER BY
  * id DESC LIMIT 1`, one session at a time, so the cursor has to be strictly
@@ -188,6 +196,33 @@ const findRevisitedSessionsWithV2Activity = (db, cursor, completedAt) =>
       return parsed.success ? [parsed.data.id] : [];
     });
 
+/**
+ * A legacy session with no `session_v2` twin that was created after the
+ * migration finished. Sessions created before that point were walked by the
+ * migration, so their absence means a v2 delete, not a missed import.
+ */
+const NEVER_IMPORTED_CONDITION = 'id NOT IN (SELECT id FROM session_v2) AND time_created > ?';
+
+const countNeverImportedSessions = (db, completedAt) =>
+  firstRow(
+    countRowSchema,
+    db.all(`SELECT COUNT(*) AS value FROM session WHERE ${NEVER_IMPORTED_CONDITION}`, [completedAt]),
+  )?.value ?? 0;
+
+/**
+ * Sessions deleted in v2 that OpenCode's loop would re-import at this cursor.
+ * The loop walks every legacy row below the cursor, so one deleted session in
+ * that range is enough to refuse.
+ */
+const countDeletedSessionsBelowCursor = (db, cursor, completedAt) =>
+  firstRow(
+    countRowSchema,
+    db.all(
+      'SELECT COUNT(*) AS value FROM session WHERE id < ? AND id NOT IN (SELECT id FROM session_v2) AND time_created <= ?',
+      [cursor, completedAt],
+    ),
+  )?.value ?? 0;
+
 const countRevisitedSessions = (db, cursor) =>
   firstRow(
     countRowSchema,
@@ -204,6 +239,11 @@ const countRevisitedSessions = (db, cursor) =>
  * external OpenCode is not OpenChamber's to steer.
  *
  * @param {{ dbPath?: string, fileSystem?: typeof fs, logger?: Pick<Console, 'log' | 'warn'>, now?: () => number }} [options]
+ * `unsafe` names one of two refusals: `revisited-sessions-have-v2-activity`
+ * (an already-migrated session under the cursor was used in v2 since) or
+ * `deleted-sessions-would-return` (a session deleted in v2 lies under the
+ * cursor and OpenCode would import it again).
+ *
  * @returns {{ status: 'skipped' | 'scheduled' | 'unsafe' | 'unavailable', missing: number, revisited: number, reason?: string }}
  */
 export const topUpV1Migration = (options = {}) => {
@@ -227,20 +267,24 @@ export const topUpV1Migration = (options = {}) => {
     const migration = readCompletedMigration(db);
     if (!migration) return outcome('skipped', 'migration-not-completed');
 
-    const missingCount =
-      firstRow(
-        countRowSchema,
-        db.all('SELECT COUNT(*) AS value FROM session WHERE id NOT IN (SELECT id FROM session_v2)'),
-      )?.value ?? 0;
+    const missingCount = countNeverImportedSessions(db, migration.completedAt);
     if (missingCount === 0) return outcome('skipped', 'nothing-missing');
 
     const maxMissing = firstRow(
       nullableIdRowSchema,
-      db.all('SELECT MAX(id) AS id FROM session WHERE id NOT IN (SELECT id FROM session_v2)'),
+      db.all(`SELECT MAX(id) AS id FROM session WHERE ${NEVER_IMPORTED_CONDITION}`, [migration.completedAt]),
     )?.id;
     if (!maxMissing) return outcome('skipped', 'nothing-missing');
 
     const cursor = computeResumeCursor(maxMissing);
+    const deletedCount = countDeletedSessionsBelowCursor(db, cursor, migration.completedAt);
+    if (deletedCount > 0) {
+      logger.warn(
+        `[OpenCode] ${missingCount} OpenCode 1.x session(s) are missing from the v2 database, but importing them ` +
+          `would bring back ${deletedCount} session(s) that were deleted in v2. Leaving the migration state untouched.`,
+      );
+      return outcome('unsafe', 'deleted-sessions-would-return', missingCount, 0);
+    }
     const revisitedCount = countRevisitedSessions(db, cursor);
     const unsafe = findRevisitedSessionsWithV2Activity(db, cursor, migration.completedAt);
     if (unsafe.length > 0) {

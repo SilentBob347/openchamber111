@@ -11,8 +11,8 @@ import { createRequire } from 'node:module';
  * (table `credential`, plain JSON values) and never writes the file again;
  * no HTTP route hands a key back. The quota providers need the raw
  * credential, so `readAuthFile()` answers from the database OpenCode actually
- * uses, with the legacy file underneath for anything the database does not
- * know. Rows are projected into the legacy `auth.json` entry shape. Nothing
+ * uses; the legacy file is the fallback only when the database cannot be
+ * read. Rows are projected into the legacy `auth.json` entry shape. Nothing
  * here writes: a write would be invisible to the running OpenCode.
  *
  * The table layout is OpenCode's private schema (v2.0.x
@@ -185,10 +185,15 @@ const readLegacyAuthFile = (): AuthFile => {
 };
 
 /** The credentials OpenCode uses, keyed by provider id, in the legacy entry shape. */
+/**
+ * A readable database is authoritative, `{}` included: OpenCode never clears
+ * `auth.json` after importing it, so merging the file back in would hand out
+ * a credential the user has since removed. The file is read only when the
+ * database cannot be.
+ */
 export const readAuthFile = (): AuthFile => {
-  const legacy = readLegacyAuthFile();
   const stored = readCredentialsFromDb(resolveCredentialDbPath(OPENCODE_DATA_DIR));
-  return stored ? { ...legacy, ...stored } : legacy;
+  return stored ?? readLegacyAuthFile();
 };
 
 export const getProviderAuth = (providerId: string): AuthEntry | null => {

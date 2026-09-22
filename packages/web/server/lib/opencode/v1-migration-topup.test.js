@@ -49,14 +49,20 @@ const createDatabase = ({ tables = ['session', 'session_v2', 'session_message', 
   db.close();
 };
 
+/**
+ * `v1` entries are ids or `{ id, timeCreated }`. A bare id stands for a session
+ * created after the migration completed (the case the top-up exists for); a
+ * session the migration already walked needs `timeCreated` before COMPLETED_AT.
+ */
 const seed = ({ v1 = [], v2 = [], messages = [], migration = { phase: 'completed' } } = {}) => {
   const db = openDb();
-  for (const id of v1) {
+  for (const entry of v1) {
+    const { id, timeCreated = COMPLETED_AT + 1 } = typeof entry === 'string' ? { id: entry } : entry;
     db.prepare('INSERT INTO session (id, project_id, time_created, time_updated) VALUES (?, ?, ?, ?)').run(
       id,
       'prj',
-      1,
-      1,
+      timeCreated,
+      timeCreated,
     );
   }
   for (const session of v2) {
@@ -218,6 +224,29 @@ describe.skipIf(!sqlite)('topUpV1Migration', () => {
       phase: 'sessions',
       cursor: computeResumeCursor('ses_f4b70000aaaa'),
     });
+  });
+
+  it('does not resurrect a session that was deleted in v2', () => {
+    // Created before the migration completed, so the migration walked it; its
+    // absence from session_v2 now means the user deleted it in v2.
+    createDatabase();
+    seed({ v1: [{ id: 'ses_a', timeCreated: COMPLETED_AT - 1 }, { id: 'ses_b', timeCreated: COMPLETED_AT - 1 }] });
+    expect(run()).toEqual({ status: 'skipped', missing: 0, revisited: 0, reason: 'nothing-missing' });
+    expect(readMigrationRow().state).toEqual({ phase: 'completed' });
+  });
+
+  it('refuses when the cursor for a missing session would pass over a deleted one', () => {
+    createDatabase();
+    seed({ v1: [{ id: 'ses_a', timeCreated: COMPLETED_AT - 1 }, 'ses_d'] });
+    expect(run()).toEqual({ status: 'unsafe', missing: 1, revisited: 0, reason: 'deleted-sessions-would-return' });
+    expect(readMigrationRow().state).toEqual({ phase: 'completed' });
+  });
+
+  it('schedules when the deleted session sorts above the cursor and stays out of reach', () => {
+    createDatabase();
+    seed({ v1: ['ses_b', { id: 'ses_z', timeCreated: COMPLETED_AT - 1 }] });
+    expect(run()).toEqual({ status: 'scheduled', missing: 1, revisited: 0 });
+    expect(readMigrationRow().state).toEqual({ phase: 'sessions', cursor: computeResumeCursor('ses_b') });
   });
 
   it('never touches the durable event log', () => {

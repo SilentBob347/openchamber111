@@ -5,11 +5,16 @@
  * never writes the file again; credentials live behind `/api/integration` and
  * `/api/credential`, and there is no HTTP route that hands a key back.
  * OpenChamber needs the raw credential for provider quota lookups, voice keys
- * and the GitHub and Linear helpers, so `readAuthFile()` answers from two
- * sources: the database OpenCode actually uses (`credential-db.js`), with the
- * legacy file underneath for anything the database does not know. The shape
- * is the legacy `auth.json` map either way. Nothing here writes: a write
- * would be invisible to the running OpenCode and drift from what it uses.
+ * and the GitHub and Linear helpers, so `readAuthFile()` answers from the
+ * database OpenCode actually uses (`credential-db.js`). A successful database
+ * read is authoritative, including an empty one: OpenCode never clears
+ * `auth.json` after importing it, and a credential the user removed in
+ * OpenCode disappears only from the database, so mixing the file back in
+ * would hand out the deleted key again. The legacy file is read only when the
+ * database cannot be read at all (no sqlite runtime, no file, unknown
+ * schema). The shape is the legacy `auth.json` map either way. Nothing here
+ * writes: a write would be invisible to the running OpenCode and drift from
+ * what it uses.
  */
 
 import fs from 'fs';
@@ -20,12 +25,12 @@ import { readCredentialsFromDb, resolveCredentialDbPath } from './credential-db.
 const OPENCODE_DATA_DIR = path.join(os.homedir(), '.local', 'share', 'opencode');
 const AUTH_FILE = path.join(OPENCODE_DATA_DIR, 'auth.json');
 
-function readLegacyAuthFile() {
-  if (!fs.existsSync(AUTH_FILE)) {
+function readLegacyAuthFile(authFile, fileSystem) {
+  if (!fileSystem.existsSync(authFile)) {
     return {};
   }
   try {
-    const content = fs.readFileSync(AUTH_FILE, 'utf8');
+    const content = fileSystem.readFileSync(authFile, 'utf8');
     const trimmed = content.trim();
     if (!trimmed) {
       return {};
@@ -37,14 +42,24 @@ function readLegacyAuthFile() {
   }
 }
 
-/** The credentials OpenCode uses, keyed by provider id, in the legacy entry shape. */
-function readAuthFile() {
-  const legacy = readLegacyAuthFile();
-  const stored = readCredentialsFromDb({
-    dbPath: resolveCredentialDbPath({ dataDir: OPENCODE_DATA_DIR, path }),
-    fs,
-  });
-  return stored ? { ...legacy, ...stored } : legacy;
+/**
+ * The credentials OpenCode uses, keyed by provider id, in the legacy entry
+ * shape. The database answer is authoritative whenever it can be read, `{}`
+ * included; the legacy file is consulted only when it cannot. A corrupt
+ * legacy file therefore never blocks a healthy database, and only throws when
+ * it is the sole source left.
+ *
+ * @param {{ dbPath?: string, authFile?: string, fileSystem?: typeof fs }} [options] test seams; production callers pass nothing.
+ */
+function readAuthFile(options = {}) {
+  const {
+    dbPath = resolveCredentialDbPath({ dataDir: OPENCODE_DATA_DIR, path }),
+    authFile = AUTH_FILE,
+    fileSystem = fs,
+  } = options;
+  const stored = readCredentialsFromDb({ dbPath, fs: fileSystem });
+  if (stored) return stored;
+  return readLegacyAuthFile(authFile, fileSystem);
 }
 
 function getProviderAuth(providerId) {
