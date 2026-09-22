@@ -197,6 +197,10 @@ function applyMessagePatch(message: Message, patch: MessagePatch): Message {
     if (patch.time) next.time = compact({ ...message.time, ...patch.time })
     if (patch.finish !== undefined) next.finish = patch.finish
     if (patch.error !== undefined) next.error = patch.error
+    // A completion the server reports supersedes the local interruption mark
+    // (`interruptedTurnToolParts`); a turn that really failed arrives with its
+    // own error in the same patch.
+    else if (patch.time?.completed !== undefined && message.error?.type === "aborted") delete next.error
     if (patch.cost !== undefined) next.cost = patch.cost
     if (patch.tokens !== undefined) next.tokens = patch.tokens
     if (patch.snapshot) next.snapshot = compact({ ...message.snapshot, ...patch.snapshot })

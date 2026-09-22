@@ -144,6 +144,27 @@ describe("message events", () => {
     expect(draft.message.ses_1[0]).toMatchObject({ agent: "build", time: { created: 10, completed: 20 }, finish: "stop", cost: 0.5 })
   })
 
+  test("a reported completion lifts the local interruption mark", () => {
+    // `interruptedTurnToolParts` closes an open turn with `{type:"aborted"}`
+    // when idle status lands before the completion event flushes.
+    const marked = assistant({ time: { created: 10, completed: 15 }, error: { type: "aborted", message: "aborted" } })
+    const draft = state({ message: { ses_1: [marked] } })
+    apply(draft, {
+      type: "message.patched",
+      properties: { sessionID: "ses_1", messageID: "msg_a", patch: { time: { completed: 20 }, finish: "stop" } },
+    })
+    expect(draft.message.ses_1[0]).toMatchObject({ time: { completed: 20 }, finish: "stop" })
+    expect("error" in draft.message.ses_1[0]).toBe(false)
+
+    // A turn that really failed keeps the error the server sent.
+    const failed = state({ message: { ses_1: [marked] } })
+    apply(failed, {
+      type: "message.patched",
+      properties: { sessionID: "ses_1", messageID: "msg_a", patch: { time: { completed: 20 }, error: { type: "unknown", message: "boom" } } },
+    })
+    expect(failed.message.ses_1[0]).toMatchObject({ error: { type: "unknown", message: "boom" } })
+  })
+
   test("a patch for a message not in memory asks for materialization", () => {
     const draft = state()
     const result = apply(draft, {

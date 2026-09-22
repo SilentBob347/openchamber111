@@ -2162,6 +2162,22 @@ export async function recoverInterruptedTurnAfterMessageLoad(
     }
   }
 
+  // The messages were read before the status. A turn that finished between
+  // the two reads leaves an open assistant message beside an idle status,
+  // which is exactly what an interrupted turn looks like, while the completion
+  // event may still sit in the pipeline's flush frame. Re-read the tail once
+  // under the settled status before judging the turn.
+  if (
+    store.getState().session_status?.[sessionID]?.type === "idle"
+    && hasUnfinishedAssistantTurn(store.getState(), sessionID)
+  ) {
+    const loader = getImperativeSessionMessageLoader()
+    if (loader) {
+      await loader.refreshTail({ directory, sessionID }, SESSION_MATERIALIZATION_MESSAGE_LIMIT)
+      if (isStale?.() || getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== sdk) return
+    }
+  }
+
   applyInterruptedTurnReconciliation(store, sessionID)
 }
 
