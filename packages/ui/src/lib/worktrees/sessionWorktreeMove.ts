@@ -239,7 +239,11 @@ const moveSessionTreeTransaction = async (
       if (rollbackFailures.length > 0) {
         throw createIncompleteRollbackError(moveError, rollbackFailures);
       }
-      if (destination?.onMoveFailure) {
+      // OpenCode admits a move durably before it answers, so a lost response
+      // does not cancel it: the session may already sit in the destination or
+      // land there once the inbox drains. Only a definite rejection proves the
+      // destination is unused and safe to delete.
+      if (destination?.onMoveFailure && !moveOutcomeUnknown) {
         return destination.onMoveFailure(moveError);
       }
       throw moveError;
@@ -298,6 +302,8 @@ const moveSessionTreeToQuickWorktree = async (input: {
       metadata: worktree,
       // removeFailedWorktree force-deletes the worktree and its branch; the
       // session's files never move, so nothing of the user's is in it yet.
+      // Called only for a definite rejection; the transaction keeps the
+      // worktree when the move outcome is unknown.
       onMoveFailure: async (error) => removeFailedWorktree(project, worktree, error),
     };
   });
