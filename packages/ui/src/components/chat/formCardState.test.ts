@@ -105,6 +105,30 @@ describe('conditional fields follow the server rules', () => {
         expect(missingRequiredKeys(fields, values)).toEqual(['detail']);
     });
 
+    for (const literal of ['Infinity', '-Infinity', 'NaN']) {
+        for (const type of ['string', 'multiselect'] as const) {
+            test(`${type} conditions compare ${literal} as a literal string`, () => {
+                const options = [{ value: literal, label: literal }];
+                const control: FormField = type === 'string'
+                    ? { key: 'choice', type, options, default: literal }
+                    : { key: 'choice', type, options, default: [literal] };
+                const fields: FormField[] = [
+                    control,
+                    { key: 'detail', type: 'string', required: true, when: [{ key: 'choice', op: 'eq', value: literal }] },
+                    { key: 'other', type: 'string', default: 'hidden', when: [{ key: 'choice', op: 'neq', value: literal }] },
+                ];
+                const values = initialFormValues(fields);
+                expect(visibleFields(fields, values).map((field) => field.key)).toEqual(['choice', 'detail']);
+                expect(missingRequiredKeys(fields, values)).toEqual(['detail']);
+                values.detail = { ...values.detail, text: 'answered' };
+                const answer = buildFormAnswer(fields, values);
+                expect(answer.detail).toBe('answered');
+                expect(answer.other).toBeUndefined();
+                expect(upstreamValidateAnswer(fields, answer)).toBeUndefined();
+            });
+        }
+    }
+
     test('a multiselect clause matches any selected entry', () => {
         const fields: FormField[] = [
             { key: 'areas', type: 'multiselect', options: [{ value: 'ui', label: 'UI' }, { value: 'api', label: 'API' }] },

@@ -141,7 +141,13 @@ always the transcript's tail, so a boundary the window does not hold is
 older than everything loaded: the reducer empties the window when the store's
 own marker names the same boundary and leaves it alone otherwise. A local send
 past a revert has already trimmed optimistically, so the event is a no-op for
-it; a commit from another client is applied by the event alone.
+it; a commit from another client is applied by the event alone. Every commit
+also invalidates the session message loader, including a commit that changes
+no visible records. This retires in-flight reads, clears deleted optimistic
+shadows and prefetch coverage, and prevents an older response or the next empty
+fetch from restoring deleted messages. The remaining visible records stay in place
+while the loader establishes fresh coverage. Their optimistic shadows remain
+until an authoritative snapshot confirms them.
 
 ## An interruption whose reason is `shutdown`
 

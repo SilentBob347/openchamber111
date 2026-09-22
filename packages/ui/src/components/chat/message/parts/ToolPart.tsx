@@ -62,6 +62,7 @@ import { areRenderRelevantPartsEqual } from '../renderCompare';
 import { useI18n } from '@/lib/i18n';
 import {
     extractFirstChangedLineFromDiff,
+    getApplyPatchFilePath,
     getDiffPatchEntries,
     getFirstChangedLineFromMetadata,
     getPatchText,
@@ -1932,11 +1933,8 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         }
 
         event.stopPropagation();
-        const displayPath = typeof file.relativePath === 'string'
-            ? file.relativePath
-            : typeof file.filePath === 'string'
-                ? getRelativePath(file.filePath, currentDirectory)
-                : '';
+        const rawPath = getApplyPatchFilePath(file);
+        const displayPath = rawPath ? getRelativePath(rawPath, currentDirectory) : '';
         openApplyPatchFileInEditor({
             currentDirectory,
             diffLabel: `${displayPath} (changes)`,
@@ -2098,6 +2096,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                 </MinDurationShineText>
                             </div>
                             <ApplyPatchFileButtons
+                                currentDirectory={currentDirectory}
                                 metadata={metadata}
                                 animate={animateTailText}
                                 showFileIcons={showToolFileIcons}

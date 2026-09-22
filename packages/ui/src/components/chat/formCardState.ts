@@ -136,11 +136,6 @@ export type FormEvaluation = {
     answer: Record<string, FormValue>;
 };
 
-/** A numeric clause value may arrive as a JSON stand-in, which no answer can equal. */
-const isNumberStandIn = (value: FormValue): value is 'Infinity' | '-Infinity' | 'NaN' => (
-    value === 'Infinity' || value === '-Infinity' || value === 'NaN'
-);
-
 /**
  * Mirrors OpenCode's `matches()` (`packages/core/src/form.ts`): a clause
  * against an unanswered field is false for both `eq` and `neq`. Combined with
@@ -149,8 +144,7 @@ const isNumberStandIn = (value: FormValue): value is 'Infinity' | '-Infinity' | 
  */
 const clauseMatches = (clause: NonNullable<AnswerableField['when']>[number], answer: FormValue | undefined): boolean => {
     if (answer === undefined) return false;
-    const expected = isNumberStandIn(clause.value) ? undefined : clause.value;
-    const hit = Array.isArray(answer) ? answer.some((entry) => entry === expected) : answer === expected;
+    const hit = Array.isArray(answer) ? answer.some((entry) => entry === clause.value) : answer === clause.value;
     return clause.op === 'eq' ? hit : !hit;
 };
 

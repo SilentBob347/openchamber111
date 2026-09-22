@@ -529,16 +529,20 @@ export class SessionMessageLoader {
     this.getEntry(target).optimistic.delete(input.messageID)
   }
 
-  invalidateSession(target: SessionMessageTarget): void {
+  /** Revert commits preserve only the optimistic records still in the reduced transcript. */
+  invalidateSession(target: SessionMessageTarget, preservedMessages: readonly Message[] = []): void {
     const normalized = this.normalizeTarget(target)
     if (!normalized) return
+    clearSessionPrefetch(normalized.directory, [normalized.sessionID], this.runtimeKey)
     const entry = this.entries.get(this.keyFor(normalized))
     if (!entry) return
     this.bumpGeneration(entry)
     entry.inflight = null
-    entry.optimistic.clear()
+    const preservedIDs = new Set(preservedMessages.map((message) => message.id))
+    for (const messageID of entry.optimistic.keys()) {
+      if (!preservedIDs.has(messageID)) entry.optimistic.delete(messageID)
+    }
     entry.snapshot = createDefaultState(entry.snapshot.generation)
-    clearSessionPrefetch(normalized.directory, [normalized.sessionID], this.runtimeKey)
     this.notify(entry)
   }
 

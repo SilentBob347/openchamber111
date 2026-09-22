@@ -183,7 +183,9 @@ export const BehaviorPage: React.FC = () => {
       if (!response.ok) {
         return autosaveFailed(await readApiError(response, t('settings.behavior.page.toast.saveFailed')));
       }
-      setPrompt(content);
+      // Normalize only the submitted draft. A newer edit must survive this
+      // response so the autosave follow-up can still write it.
+      setPrompt((current) => current === prompt ? content : current);
     }
 
     const result = await updateDesktopSettings({

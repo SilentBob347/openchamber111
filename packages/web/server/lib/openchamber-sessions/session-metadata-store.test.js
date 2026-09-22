@@ -79,14 +79,14 @@ describe('createSessionMetadataStore', () => {
     expect(merged).toEqual({ openchamber: { assist: { recap: 'done' }, goal: { status: 'active' } } });
   });
 
-  it('deletes a key with a null patch value and drops a session that empties out', async () => {
+  it('keeps an authoritative empty record when a null patch removes the final key', async () => {
     const dataDir = makeDataDir();
     const store = createSessionMetadataStore({ dataDir });
     await store.setSessionMetadata('ses_1', { openchamber: { goal: { id: 'g1' } } });
 
     await expect(store.setSessionMetadata('ses_1', { openchamber: null })).resolves.toEqual({});
-    await expect(store.getAll()).resolves.toEqual({});
-    expect(JSON.parse(readFile(dataDir))).toEqual({});
+    await expect(store.getAll()).resolves.toEqual({ ses_1: {} });
+    expect(JSON.parse(readFile(dataDir))).toEqual({ ses_1: {} });
   });
 
   it('scopes metadata per session', async () => {
@@ -226,6 +226,23 @@ describe('createSessionMetadataStore', () => {
       await expect(store.get('ses_v1')).resolves.toEqual({ openchamber: { pins: { notes: ['n1'] } } });
       expect(JSON.parse(readFile(dataDir))).toEqual({ ses_v1: { openchamber: { pins: { notes: ['n1'] } } } });
       await expect(store.get('ses_v1')).resolves.toEqual({ openchamber: { pins: { notes: ['n1'] } } });
+      expect(readUpstreamMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['reviewSessionID', 'btwSessionID'])('keeps a cleared %s absent after reads, restart and another write', async (linkKey) => {
+      const dataDir = makeDataDir();
+      const readUpstreamMetadata = vi.fn(async () => ({ openchamber: { [linkKey]: 'ses_old' } }));
+      const store = createSessionMetadataStore({ dataDir, readUpstreamMetadata });
+      await store.get('ses_parent');
+
+      await expect(store.setSessionMetadata('ses_parent', { openchamber: null })).resolves.toEqual({});
+      await expect(store.get('ses_parent')).resolves.toEqual({});
+      expect(JSON.parse(readFile(dataDir))).toEqual({ ses_parent: {} });
+
+      const reopened = createSessionMetadataStore({ dataDir, readUpstreamMetadata });
+      await expect(reopened.get('ses_parent')).resolves.toEqual({});
+      await expect(reopened.setSessionMetadata('ses_parent', { openchamber: { goal: { id: 'g1' } } }))
+        .resolves.toEqual({ openchamber: { goal: { id: 'g1' } } });
       expect(readUpstreamMetadata).toHaveBeenCalledTimes(1);
     });
 

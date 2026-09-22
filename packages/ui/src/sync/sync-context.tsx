@@ -1735,6 +1735,9 @@ export function handleEvent(
   }
 
   if (!store) {
+    if (payload.type === "session.revert.committed") {
+      getImperativeSessionMessageLoader()?.invalidateSession({ directory: resolvedDirectory, sessionID: payload.properties.sessionID })
+    }
     notifyBlockingRequestWithoutStore(payload, directory)
     // Try as global event for unknown directories
     const result = reduceGlobalEvent(payload)
@@ -1899,6 +1902,14 @@ export function handleEvent(
   const reducerResult = applyDirectoryEvent(draft, payload)
   const reducerChanged = typeof reducerResult === "boolean" ? reducerResult : reducerResult.changed
   const materializationResult = typeof reducerResult === "boolean" ? undefined : reducerResult.materialization
+  // Retire old reads even if a local send already removed the reverted range.
+  // Only optimistic messages surviving the reducer may enter the next fetch.
+  if (payload.type === "session.revert.committed") {
+    const { sessionID } = payload.properties
+    getImperativeSessionMessageLoader()?.invalidateSession(
+      { directory: resolvedDirectory, sessionID }, draft.message[sessionID] ?? [],
+    )
+  }
   if (reducerChanged && (payload.type === "session.patched" || payload.type === "session.deleted")) {
     recordDirectoryRecoveryEvent(store, payload)
   }

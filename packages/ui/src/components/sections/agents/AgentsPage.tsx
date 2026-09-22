@@ -143,6 +143,13 @@ export const AgentsPage: React.FC = () => {
   // form differs from it, and an incoming refresh only repopulates the form
   // when the stored value moved away from it.
   const savedRef = React.useRef<FormState | null>(null);
+  const selectionKey = JSON.stringify([selectedAgentName, settingsDirectory, isNewAgent]);
+  const selectionRef = React.useRef(selectionKey);
+  selectionRef.current = selectionKey;
+  const hydratedSelectionRef = React.useRef<string | null>(null);
+  const currentFields = { description, mode, model, variant, steps, temperature, topP, system };
+  const currentFieldsRef = React.useRef(currentFields);
+  currentFieldsRef.current = currentFields;
 
   const variantOptions = React.useMemo(() => getVariantOptionsForModel(providers, model), [model, providers]);
   const hasVariantOptions = variantOptions.length > 0;
@@ -154,6 +161,7 @@ export const AgentsPage: React.FC = () => {
 
   React.useEffect(() => {
     if (!isNewAgent || !agentDraft) return;
+    hydratedSelectionRef.current = null;
     const parsedModel = parseModelSelection(agentDraft.model);
     const draftNameValue = agentDraft.name || '';
     const draftScopeValue = agentDraft.scope || 'user';
@@ -201,7 +209,7 @@ export const AgentsPage: React.FC = () => {
     let cancelled = false;
     void (async () => {
       const envelope = await fetchAgentEntity(selectedAgentName, settingsDirectory);
-      if (cancelled || !envelope) return;
+      if (cancelled || selectionRef.current !== selectionKey || !envelope) return;
       const entity = envelope.config;
       entityRef.current = entity;
       const parsedModel = parseModelSelection(entity.model);
@@ -220,22 +228,17 @@ export const AgentsPage: React.FC = () => {
       };
 
       const saved = savedRef.current;
-      // OpenCode re-reads the file after every write, so a refresh lands moments
-      // after our own save. Repopulating then would drop what the user typed in
-      // the meantime, so the form only follows the file when the file moved.
-      const isEcho =
-        saved !== null &&
-        saved.description === next.description &&
-        saved.mode === next.mode &&
-        saved.model === next.model &&
-        saved.variant === next.variant &&
-        saved.steps === next.steps &&
-        saved.temperature === next.temperature &&
-        saved.topP === next.topP &&
-        saved.system === next.system;
-
+      const current = currentFieldsRef.current;
+      const dirty = saved !== null && (
+        current.description !== saved.description || current.mode !== saved.mode ||
+        current.model !== saved.model || current.variant !== saved.variant ||
+        current.steps !== saved.steps || current.temperature !== saved.temperature ||
+        current.topP !== saved.topP || current.system !== saved.system
+      );
       setStoredAt({ legacy: envelope.legacy === true, path: envelope.path });
-      if (isEcho) return;
+      // A refresh can publish an older write while the next draft is still being edited.
+      if (hydratedSelectionRef.current === selectionKey && dirty) return;
+      hydratedSelectionRef.current = selectionKey;
 
       setDescription(next.description);
       setMode(next.mode);
@@ -250,7 +253,7 @@ export const AgentsPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [fetchAgentEntity, isNewAgent, selectedAgent, selectedAgentName, settingsDirectory]);
+  }, [fetchAgentEntity, isNewAgent, selectedAgent, selectedAgentName, settingsDirectory, selectionKey]);
 
   const buildConfig = React.useCallback((agentName: string): AgentConfig => {
     const parsedModel = parseModelIdentifier(model.trim());
@@ -324,9 +327,8 @@ export const AgentsPage: React.FC = () => {
 
     const config = buildConfig(agentName);
     const result: AgentMutationResult = await updateAgent(agentName, config, settingsDirectory);
-    if (!result.ok) {
-      return autosaveFailed(t('settings.agents.page.toast.updateFailed'));
-    }
+    if (!result.ok) return autosaveFailed(t('settings.agents.page.toast.updateFailed'));
+    if (selectionRef.current !== selectionKey) return AUTOSAVE_SAVED;
 
     entityRef.current = {
       ...entityRef.current,
@@ -354,6 +356,7 @@ export const AgentsPage: React.FC = () => {
     mode,
     model,
     selectedAgentName,
+    selectionKey,
     settingsDirectory,
     steps,
     system,

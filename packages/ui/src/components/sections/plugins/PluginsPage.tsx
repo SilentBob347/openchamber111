@@ -13,9 +13,12 @@ import {
   autosaveFailed,
   type AutosaveResult,
 } from '@/components/sections/shared/SettingsAutosave';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { useProjectsStore } from '@/stores/useProjectsStore';
 import { RegistryBanner } from './RegistryBanner';
 import {
   usePluginsStore,
+  getPluginsConfigDirectory,
   type PluginDraft,
   type PluginEntry,
   type PluginFile,
@@ -48,6 +51,14 @@ function stringifyOptions(options: Record<string, unknown> | undefined): string 
     return '';
   }
   return JSON.stringify(options, null, 2);
+}
+
+function optionsEqual(left: string, right: string): boolean {
+  if (left.trim() === right.trim()) return true;
+  const parsedLeft = parseOptionsJson(left);
+  const parsedRight = parseOptionsJson(right);
+  return parsedLeft.ok && parsedRight.ok
+    && stringifyOptions(parsedLeft.value) === stringifyOptions(parsedRight.value);
 }
 
 function buildEntryDraft(entry: PluginEntry): PluginDraft {
@@ -90,6 +101,11 @@ const ScopeBadge: React.FC<{ scope: PluginScope; label: string }> = ({ scope, la
 export const PluginsPage: React.FC = () => {
   const { t } = useI18n();
 
+  const projectDirectory = useProjectsStore((state) => state.getActiveProject()?.path);
+  const configDirectory = projectDirectory?.trim() || getPluginsConfigDirectory();
+  const loadedDirectory = usePluginsStore((state) => state.loadedDirectory);
+  const loadedRuntimeKey = usePluginsStore((state) => state.loadedRuntimeKey);
+  const catalogIsCurrent = loadedDirectory === configDirectory && loadedRuntimeKey === getRuntimeKey();
   const selectedId = usePluginsStore((s) => s.selectedId);
   const entries = usePluginsStore((s) => s.entries);
   const files = usePluginsStore((s) => s.files);
@@ -110,48 +126,68 @@ export const PluginsPage: React.FC = () => {
 
   const [isLoadingFile, setIsLoadingFile] = React.useState(false);
   const originalFileContentById = React.useRef(new Map<string, string>());
+  const hydratedDraft = React.useRef<{ id: string; directory: string | null; value: PluginDraft } | null>(null);
+  const fileKey = JSON.stringify([configDirectory, selectedId]);
 
   React.useEffect(() => {
     let cancelled = false;
+    if (!catalogIsCurrent) {
+      hydratedDraft.current = null;
+      setDraft(null);
+      return;
+    }
+    const hydrate = (id: string, value: PluginDraft) => {
+      if (usePluginsStore.getState().selectedId !== id || getPluginsConfigDirectory() !== configDirectory) return;
+      const previous = hydratedDraft.current;
+      const current = usePluginsStore.getState().draft;
+      const dirty = previous?.id === id && previous.directory === configDirectory && current !== null && (
+        current.spec !== previous.value.spec
+        || !optionsEqual(current.optionsJson, previous.value.optionsJson)
+        || current.content !== previous.value.content
+      );
+      hydratedDraft.current = { id, directory: configDirectory, value };
+      if (!dirty) setDraft(value);
+    };
 
     if (selectedEntry) {
-      setDraft(buildEntryDraft(selectedEntry));
+      hydrate(selectedEntry.id, buildEntryDraft(selectedEntry));
       return () => {
         cancelled = true;
       };
     }
 
     if (selectedFile) {
-      setIsLoadingFile(true);
+      setIsLoadingFile(hydratedDraft.current?.id !== selectedFile.id || hydratedDraft.current.directory !== configDirectory);
       void (async () => {
         const result = await readFile(selectedFile.id);
-        if (cancelled) return;
+        if (cancelled || getPluginsConfigDirectory() !== configDirectory) return;
         setIsLoadingFile(false);
         const content = result?.content ?? '';
-        originalFileContentById.current.set(selectedFile.id, content);
-        setDraft(buildFileDraft(selectedFile, content));
+        originalFileContentById.current.set(fileKey, content);
+        hydrate(selectedFile.id, buildFileDraft(selectedFile, content));
       })();
       return () => {
         cancelled = true;
       };
     }
 
+    hydratedDraft.current = null;
     setDraft(null);
     return () => {
       cancelled = true;
     };
-  }, [selectedEntry, selectedFile, readFile, setDraft]);
+  }, [selectedEntry, selectedFile, readFile, setDraft, catalogIsCurrent, configDirectory, fileKey]);
 
   // One routine for both shapes the page edits: a registry entry (spec +
   // options) and a plugin file (its contents). Text fields commit on blur, so
   // this runs with whatever the draft holds at that moment.
   const save = React.useCallback(async (): Promise<AutosaveResult> => {
-    if (!draft) return AUTOSAVE_UNCHANGED;
+    if (!draft || !catalogIsCurrent || getPluginsConfigDirectory() !== configDirectory) return AUTOSAVE_UNCHANGED;
 
     if (selectedEntry && draft.mode === 'entry') {
       const spec = draft.spec.trim();
       const unchanged = spec === selectedEntry.spec
-        && draft.optionsJson.trim() === stringifyOptions(selectedEntry.options).trim();
+        && optionsEqual(draft.optionsJson, stringifyOptions(selectedEntry.options));
       if (unchanged) return AUTOSAVE_UNCHANGED;
       if (!spec) return autosaveFailed(t('settings.plugins.validation.specRequired'));
       const options = parseOptionsJson(draft.optionsJson);
@@ -168,14 +204,14 @@ export const PluginsPage: React.FC = () => {
     }
 
     if (selectedFile && draft.mode === 'file') {
-      const originalContent = originalFileContentById.current.get(selectedFile.id) ?? '';
+      const originalContent = originalFileContentById.current.get(fileKey) ?? '';
       if (draft.content === originalContent) return AUTOSAVE_UNCHANGED;
 
       const result = await updateFile(selectedFile.id, { content: draft.content });
       if (!result.ok) {
         return autosaveFailed(result.message || t('settings.plugins.toast.reloadFailed'));
       }
-      originalFileContentById.current.set(selectedFile.id, draft.content);
+      originalFileContentById.current.set(fileKey, draft.content);
       if (result.reloadFailed) {
         return autosaveFailed(result.warning || result.message || t('settings.plugins.toast.reloadFailed'));
       }
@@ -183,7 +219,7 @@ export const PluginsPage: React.FC = () => {
     }
 
     return AUTOSAVE_UNCHANGED;
-  }, [draft, selectedEntry, selectedFile, t, updateEntry, updateFile]);
+  }, [draft, selectedEntry, selectedFile, t, updateEntry, updateFile, catalogIsCurrent, configDirectory, fileKey]);
 
   const autosave = useAutosave(save);
 

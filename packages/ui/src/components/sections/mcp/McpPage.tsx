@@ -649,6 +649,18 @@ export const McpPage: React.FC = () => {
     enabled: boolean;
   } | null>(null);
 
+  const selectionKey = JSON.stringify([selectedMcpName, currentDirectory, isNewServer]);
+  const selectionRef = React.useRef(selectionKey);
+  selectionRef.current = selectionKey;
+  const hydratedSelectionRef = React.useRef<string | null>(null);
+  const currentForm = {
+    mcpType, command, url, envEntries, headerEntries, timeoutStartup, timeoutCatalog,
+    timeoutExecution, codemode, protocol,
+    oauthAuthServerMetadataUrl: mcpType === 'remote' ? oauthAuthServerMetadataUrl : '', enabled,
+  };
+  const currentFormRef = React.useRef(currentForm);
+  currentFormRef.current = currentForm;
+
   const handleOpenImportDialog = React.useCallback(() => {
     setImportJsonText('');
     setImportError(null);
@@ -734,6 +746,7 @@ export const McpPage: React.FC = () => {
   // Populate form when selection changes
   React.useEffect(() => {
     if (isNewServer && mcpDraft) {
+      hydratedSelectionRef.current = null;
       setDraftName(mcpDraft.name);
       setDraftScope(mcpDraft.scope || 'user');
       setMcpType(mcpDraft.type);
@@ -793,24 +806,11 @@ export const McpPage: React.FC = () => {
         ? remoteServer.oauth.auth_server_metadata_url ?? ''
         : '';
       const nextEnabled = selectedServer.disabled !== true;
-      const saved = savedRef.current;
-      // OpenCode re-reads the config right after our own write, so the store
-      // echoes back what we just saved. Only a genuinely different server
-      // value replaces what the user has in the form.
-      const isEcho = saved !== null
-        && saved.mcpType === serverType
-        && saved.url === u
-        && saved.timeoutStartup === nextStartup
-        && saved.timeoutCatalog === nextCatalog
-        && saved.timeoutExecution === nextExecution
-        && saved.codemode === nextCodemode
-        && saved.protocol === nextProtocol
-        && saved.oauthAuthServerMetadataUrl === nextAuthServerMetadataUrl
-        && saved.enabled === nextEnabled
-        && JSON.stringify(saved.command) === JSON.stringify(cmd)
-        && JSON.stringify(saved.envEntries) === JSON.stringify(envArr)
-        && JSON.stringify(saved.headerEntries) === JSON.stringify(headersArr);
-      if (isEcho) return;
+      setCarriedOAuth(nextCarriedOAuth);
+      // Keep local edits when a completed write refreshes the same server.
+      const dirty = savedRef.current !== null && JSON.stringify(savedRef.current) !== JSON.stringify(currentFormRef.current);
+      if (hydratedSelectionRef.current === selectionKey && dirty) return;
+      hydratedSelectionRef.current = selectionKey;
 
       setMcpType(serverType);
       setCommand(cmd);
@@ -823,7 +823,6 @@ export const McpPage: React.FC = () => {
       setCodemode(nextCodemode);
       setProtocol(nextProtocol);
       setOauthAuthServerMetadataUrl(nextAuthServerMetadataUrl);
-      setCarriedOAuth(nextCarriedOAuth);
       setEnabled(nextEnabled);
       setIsAdvancedRemoteOptionsOpen(false);
       savedRef.current = {
@@ -841,26 +840,7 @@ export const McpPage: React.FC = () => {
         enabled: nextEnabled,
       };
     }
-  }, [selectedServer, isNewServer, mcpDraft]);
-
-  const isDirty = React.useMemo(() => {
-    const init = savedRef.current;
-    if (!init) return false;
-    return (
-      mcpType !== init.mcpType ||
-      enabled !== init.enabled ||
-      JSON.stringify(command) !== JSON.stringify(init.command) ||
-      url !== init.url ||
-      JSON.stringify(envEntries) !== JSON.stringify(init.envEntries) ||
-      JSON.stringify(headerEntries) !== JSON.stringify(init.headerEntries) ||
-      codemode !== init.codemode ||
-      protocol !== init.protocol ||
-      oauthAuthServerMetadataUrl !== init.oauthAuthServerMetadataUrl ||
-      timeoutStartup !== init.timeoutStartup ||
-      timeoutCatalog !== init.timeoutCatalog ||
-      timeoutExecution !== init.timeoutExecution
-    );
-  }, [mcpType, command, url, envEntries, headerEntries, codemode, protocol, oauthAuthServerMetadataUrl, timeoutStartup, timeoutCatalog, timeoutExecution, enabled]);
+  }, [selectedServer, selectedMcpName, currentDirectory, isNewServer, mcpDraft, selectionKey]);
 
   /** Empty is fine — the field is optional; anything else must be fetchable. */
   const authServerMetadataUrlError = React.useMemo(() => {
@@ -944,7 +924,11 @@ export const McpPage: React.FC = () => {
   const save = React.useCallback(async (): Promise<AutosaveResult> => {
     const saved = savedRef.current;
     if (isNewServer || !saved || !selectedMcpName) return AUTOSAVE_UNCHANGED;
-    if (!isDirty) return AUTOSAVE_UNCHANGED;
+    if (JSON.stringify(saved) === JSON.stringify({
+      mcpType, command, url, envEntries, headerEntries, timeoutStartup, timeoutCatalog,
+      timeoutExecution, codemode, protocol,
+      oauthAuthServerMetadataUrl: mcpType === 'remote' ? oauthAuthServerMetadataUrl : '', enabled,
+    })) return AUTOSAVE_UNCHANGED;
 
     if (mcpType === 'local' && command.filter(Boolean).length === 0) {
       return autosaveFailed(t('settings.mcp.page.toast.localCommandRequired'));
@@ -957,9 +941,8 @@ export const McpPage: React.FC = () => {
     }
 
     const result = await updateMcp(selectedMcpName, buildDraft(selectedMcpName), currentDirectory);
-    if (!result.ok) {
-      return autosaveFailed(t('settings.mcp.page.toast.saveFailed'));
-    }
+    if (!result.ok) return autosaveFailed(t('settings.mcp.page.toast.saveFailed'));
+    if (selectionRef.current !== selectionKey) return AUTOSAVE_SAVED;
 
     savedRef.current = {
       mcpType, command, url, envEntries, headerEntries,
@@ -975,8 +958,8 @@ export const McpPage: React.FC = () => {
     // `buildDraft` is rebuilt every render from exactly this state.
   }, [
     authServerMetadataUrlError, carriedOAuth, codemode, command, currentDirectory, draftScope, enabled,
-    envEntries, headerEntries, isDirty, isNewServer, mcpType, oauthAuthServerMetadataUrl, protocol,
-    refreshStatus, selectedMcpName, t, timeoutCatalog, timeoutExecution, timeoutStartup,
+    envEntries, headerEntries, isNewServer, mcpType, oauthAuthServerMetadataUrl, protocol,
+    refreshStatus, selectedMcpName, selectionKey, t, timeoutCatalog, timeoutExecution, timeoutStartup,
     updateMcp, url,
   ]);
 

@@ -357,17 +357,14 @@ export const registerOpenCodeProxy = (app, deps) => {
   };
 
   /**
-   * OpenChamber's stored metadata wins per key: OpenCode only ever saw what was
-   * set at create time, and everything written since lives on our side.
+   * The store seeds the full upstream metadata before its first mutation.
+   * Its record is authoritative, including {}, so deleted keys stay deleted.
    */
   const withStoredMetadata = (session, stored) => {
     if (!session || typeof session !== 'object' || typeof session.id !== 'string') return session;
     const ours = stored[session.id];
     if (!ours || typeof ours !== 'object' || Array.isArray(ours)) return session;
-    const theirs = session.metadata && typeof session.metadata === 'object' && !Array.isArray(session.metadata)
-      ? session.metadata
-      : {};
-    return { ...session, metadata: { ...theirs, ...ours } };
+    return { ...session, metadata: ours };
   };
 
   const overlaySession = (session, archived, stored) => {

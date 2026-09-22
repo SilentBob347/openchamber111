@@ -219,32 +219,49 @@ const SkillsInstalledPage: React.FC = () => {
     }
   }, [t]);
 
+  const skillEditorKey = JSON.stringify([settingsDirectory, selectedSkillName, selectedSkill?.path, isNewSkill]);
+  const hydratedSkill = React.useRef<string | null>(null);
+  const currentEditor = React.useRef({ key: skillEditorKey, markdown: skillMarkdown });
+  currentEditor.current = { key: skillEditorKey, markdown: skillMarkdown };
+  const savedMarkdown = React.useRef('');
+
   React.useEffect(() => {
+    let cancelled = false;
+    const hydrateText = (nextDescription: string, nextInstructions: string) => {
+      if (currentEditor.current.key !== skillEditorKey) return;
+      const markdown = buildSkillMarkdown(nextDescription, nextInstructions);
+      const dirty = hydratedSkill.current === skillEditorKey
+        && currentEditor.current.markdown !== savedMarkdown.current;
+      hydratedSkill.current = skillEditorKey;
+      savedMarkdown.current = markdown;
+      if (!dirty) {
+        setDescription(nextDescription);
+        setInstructions(nextInstructions);
+        setSkillMarkdown(markdown);
+      }
+    };
     const loadSkillDetails = async () => {
       if (isNewSkill && skillDraft) {
+        setIsLoading(false);
         const nextDescription = skillDraft.description || '';
         const nextInstructions = skillDraft.instructions || '';
         setDraftName(skillDraft.name || '');
         setDraftScope(skillDraft.scope || 'user');
         setDraftSource(skillDraft.source === 'agents' ? 'agents' : 'opencode');
-        setDescription(nextDescription);
-        setInstructions(nextInstructions);
-        setSkillMarkdown(buildSkillMarkdown(nextDescription, nextInstructions));
+        hydrateText(nextDescription, nextInstructions);
         setOriginalDescription('');
         setOriginalInstructions('');
         setSupportingFiles([]);
         setPendingFiles(skillDraft.pendingFiles || []);
       } else if (selectedSkillName && selectedSkill) {
-        setIsLoading(true);
+        setIsLoading(hydratedSkill.current !== skillEditorKey);
         try {
           const detail = await getSkillDetail(selectedSkillName, settingsDirectory);
-          if (detail) {
+          if (!cancelled && currentEditor.current.key === skillEditorKey && detail) {
             const md = detail.sources.md;
             const nextDescription = md.description || '';
             const nextInstructions = md.instructions || '';
-            setDescription(nextDescription);
-            setInstructions(nextInstructions);
-            setSkillMarkdown(buildSkillMarkdown(nextDescription, nextInstructions));
+            hydrateText(nextDescription, nextInstructions);
             setOriginalDescription(nextDescription);
             setOriginalInstructions(nextInstructions);
             setSupportingFiles(md.supportingFiles || []);
@@ -252,13 +269,14 @@ const SkillsInstalledPage: React.FC = () => {
         } catch (error) {
           console.error('Failed to load skill details:', error);
         } finally {
-          setIsLoading(false);
+          if (!cancelled) setIsLoading(false);
         }
       }
     };
 
-    loadSkillDetails();
-  }, [selectedSkill, isNewSkill, selectedSkillName, settingsDirectory, skills, skillDraft, getSkillDetail]);
+    void loadSkillDetails();
+    return () => { cancelled = true; };
+  }, [selectedSkill, isNewSkill, selectedSkillName, settingsDirectory, skills, skillDraft, getSkillDetail, skillEditorKey]);
 
   const editorFontSize = useUIStore((state) => state.editorFontSize);
 
@@ -335,8 +353,11 @@ const SkillsInstalledPage: React.FC = () => {
       return autosaveFailed(t('settings.skills.page.toast.updateSkillFailed'));
     }
 
-    setOriginalDescription(description);
-    setOriginalInstructions(instructions);
+    if (currentEditor.current.key === skillEditorKey) {
+      savedMarkdown.current = buildSkillMarkdown(description, instructions);
+      setOriginalDescription(description);
+      setOriginalInstructions(instructions);
+    }
     return AUTOSAVE_SAVED;
   }, [
     description,
@@ -348,6 +369,7 @@ const SkillsInstalledPage: React.FC = () => {
     selectedSkill?.path,
     selectedSkillName,
     settingsDirectory,
+    skillEditorKey,
     t,
     updateSkill,
   ]);

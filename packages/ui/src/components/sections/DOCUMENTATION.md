@@ -30,8 +30,8 @@ The contract, implemented by `shared/SettingsAutosave.tsx`:
   reports through the page: `agents/AgentPermissionsEditor.tsx` hands its save
   routine to `AgentsPage` via `registerSave`, and the page's save runs it, so a
   failure is reported once.
-- Overlapping saves are generation-checked: a slow earlier save cannot overwrite
-  the outcome of a later one.
+- Saves run serially. A save request received during a write queues one follow-up
+  using the latest committed form state. Unmounting prevents that follow-up.
 
 Do not route these pages through `reportSettingsSaveState` / `showSaveStatus`.
 That indicator belongs to settings persisted by `updateDesktopSettings`, and it
@@ -39,13 +39,20 @@ is deliberately silent on success.
 
 ### Reconciliation
 
-OpenCode re-reads the file after every write, so the store refreshes moments
-later with what was just saved. Each page keeps a "what is on disk" snapshot
-(`savedRef`, or `originalDescription`/`originalInstructions` in `skills/`) and
-updates it on a successful save. The effect that populates the form from the
-store compares against that snapshot and returns early when the incoming value
-is the echo of our own write; only a genuinely different server value replaces
-what the user has in the form.
+OpenCode re-reads files after writes. Store refreshes can arrive before the
+save promise settles, while the user is already editing the next version.
+Commands compare incoming values with both the saved baseline and the normalized
+submitted snapshot. Successful saves keep that normalized baseline for late
+echoes. Agents and MCP preserve dirty drafts and their baseline during refreshes
+of the same entity; successful saves advance that baseline. Skills and plugins
+preserve dirty drafts while updating their server baseline. A failed write leaves
+the form dirty for retry. Superseded skill detail reads are ignored.
+Behavior only normalizes the submitted prompt if the user has not changed it.
+
+Scope reconciliation to the selected entity and Settings directory. Selecting
+another entity hydrates its form, and an older save completion must not replace
+its baseline. Runtime endpoint changes remount Settings through the keyed
+`SyncProvider` in `App.tsx`.
 
 ### Creating an entity
 

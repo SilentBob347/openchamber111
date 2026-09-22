@@ -28,6 +28,12 @@ it rebuilt a catalog. The sync layer calls it from `reloadCatalog`; see
 pending-restart queue: config mutations take effect as soon as OpenCode has
 re-read the file, and only the OpenCode binary path restarts the server.
 
+Plugin catalogs carry `loadedDirectory` and `loadedRuntimeKey`, the owner of
+the installed list. The editor waits for that directory's catalog before hydrating a draft;
+plugin IDs alone are not unique across projects. Catalog requests and their
+TTL caches are scoped by runtime and directory. A response for a superseded
+owner cannot replace the catalog or finish the current owner's loading state.
+
 ### Feature cache / query stores
 
 PR status reads share the aggregate background-network budget as well as their PR-specific cap. Command discovery gates each scope/config read, including body decoding, rather than only gating the initial SDK list. Command reads have a bounded deadline and abort on runtime reset. Reset clears server-derived command caches and invalidates late reads and mutation responses while preserving unsaved command drafts.

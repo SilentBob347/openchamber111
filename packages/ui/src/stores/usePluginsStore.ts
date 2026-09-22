@@ -6,6 +6,7 @@ import { refreshAfterOpenCodeRestart } from '@/stores/useAgentsStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { opencodeClient } from '@/lib/opencode/client';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 export type PluginScope = 'user' | 'project';
 type PluginParsedKind = 'npm' | 'path';
@@ -56,6 +57,8 @@ export type RegistryResult =
 
 export interface PluginsStore {
   entries: PluginEntry[];
+  loadedDirectory: string | null | undefined;
+  loadedRuntimeKey: string | undefined;
   files: PluginFile[];
   selectedId: string | null;
   isLoading: boolean;
@@ -104,7 +107,7 @@ type PluginFileContent = {
   content: string;
 };
 
-const getConfigDirectory = (): string | null => {
+export const getPluginsConfigDirectory = (): string | null => {
   try {
     const projectsStore = useProjectsStore.getState();
     const activeProject = projectsStore.getActiveProject?.();
@@ -130,7 +133,7 @@ const pluginsLoadInFlight = new Map<string, Promise<boolean>>();
 const REGISTRY_SPECS_CHUNK_LIMIT = 1500;
 
 const getPluginCacheKey = (directory: string | null): string => {
-  return directory?.trim() || DEFAULT_PLUGINS_CACHE_KEY;
+  return JSON.stringify([getRuntimeKey(), directory?.trim() || DEFAULT_PLUGINS_CACHE_KEY]);
 };
 
 const invalidatePluginCache = (directory: string | null) => {
@@ -142,6 +145,8 @@ export const usePluginsStore = create<PluginsStore>()(
     persist(
       (set, get) => ({
         entries: [],
+        loadedDirectory: undefined,
+        loadedRuntimeKey: undefined,
         files: [],
         selectedId: null,
         isLoading: false,
@@ -154,11 +159,13 @@ export const usePluginsStore = create<PluginsStore>()(
         setDraft: (draft) => set({ draft }),
 
         loadPlugins: async (options) => {
-          const configDirectory = getConfigDirectory();
+          const configDirectory = getPluginsConfigDirectory();
+          const runtimeKey = getRuntimeKey();
           const cacheKey = getPluginCacheKey(configDirectory);
           const now = Date.now();
           const loadedAt = pluginsLastLoadedAt.get(cacheKey) ?? 0;
-          const hasCachedPlugins = get().entries.length > 0 || get().files.length > 0;
+          const hasCachedPlugins = get().loadedRuntimeKey === runtimeKey && get().loadedDirectory === configDirectory
+            && (get().entries.length > 0 || get().files.length > 0);
 
           if (!options?.force && hasCachedPlugins && now - loadedAt < PLUGINS_LOAD_CACHE_TTL_MS) {
             return true;
@@ -179,13 +186,15 @@ export const usePluginsStore = create<PluginsStore>()(
                 throw new Error('Failed to load plugins');
               }
               const data = await readJson<PluginsListResponse>(response);
-              set({ entries: data.entries ?? [], files: data.files ?? [], isLoading: false });
+              if (getPluginCacheKey(getPluginsConfigDirectory()) !== cacheKey) return false;
+              set({ entries: data.entries ?? [], files: data.files ?? [], loadedDirectory: configDirectory, loadedRuntimeKey: runtimeKey, isLoading: false });
               pluginsLastLoadedAt.set(cacheKey, Date.now());
               if (!options?.force) {
                 void get().loadRegistryInfo();
               }
               return true;
             } catch (error) {
+              if (getPluginCacheKey(getPluginsConfigDirectory()) !== cacheKey) return false;
               console.error('[PluginsStore] Failed to load plugins:', error);
               set({ isLoading: false });
               return false;
@@ -196,7 +205,7 @@ export const usePluginsStore = create<PluginsStore>()(
           try {
             return await request;
           } finally {
-            pluginsLoadInFlight.delete(cacheKey);
+            if (pluginsLoadInFlight.get(cacheKey) === request) pluginsLoadInFlight.delete(cacheKey);
           }
         },
 
@@ -209,7 +218,7 @@ export const usePluginsStore = create<PluginsStore>()(
 
           set({ isLoadingRegistry: true });
           try {
-            const configDirectory = getConfigDirectory();
+            const configDirectory = getPluginsConfigDirectory();
             const nextRegistryInfo: Record<string, RegistryResult> = { ...get().registryInfo };
             for (const chunk of chunkSpecs(specs)) {
               const response = await runtimeFetch(buildRegistryUrl(chunk, opts?.force === true, configDirectory), {
@@ -297,7 +306,7 @@ export const usePluginsStore = create<PluginsStore>()(
 
         readFile: async (id) => {
           try {
-            const configDirectory = getConfigDirectory();
+            const configDirectory = getPluginsConfigDirectory();
             const response = await runtimeFetch(buildPluginsUrl(`/api/config/plugins/file/${encodeURIComponent(id)}`, configDirectory), {
               headers: buildDirectoryHeaders(configDirectory),
             });
@@ -430,7 +439,7 @@ async function runPluginMutation(
   options?: { restartId?: string },
 ): Promise<PluginMutationResult> {
   try {
-    const configDirectory = getConfigDirectory();
+    const configDirectory = getPluginsConfigDirectory();
     const response = await request(configDirectory);
     const payload = await readJson<PluginMutationPayload | null>(response).catch(() => null);
 

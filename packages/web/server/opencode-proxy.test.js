@@ -579,14 +579,18 @@ describe('OpenCode proxy SSE forwarding', () => {
     upstream.get('/api/session', (_req, res) => {
       res.json({
         data: [
-          { id: 'ses_1', location: { directory: '/repo/app' }, title: 'Alpha', time: { created: 1, updated: 2 }, metadata: { fromOpenCode: true, shared: 'theirs' } },
-          { id: 'ses_2', location: { directory: '/repo/app' }, title: 'Beta', time: { created: 1, updated: 3, archived: 999 } },
+          { id: 'ses_1', location: { directory: '/repo/app' }, title: 'Alpha', time: { created: 1, updated: 2 }, metadata: { fromOpenCode: true, shared: 'theirs', removed: 'stale' } },
+          { id: 'ses_2', location: { directory: '/repo/app' }, title: 'Beta', time: { created: 1, updated: 3, archived: 999 }, metadata: { openchamber: { reviewSessionID: 'ses_old' } } },
+          { id: 'ses_3', metadata: { untouched: true } },
         ],
         cursor: {},
       });
     });
     upstream.get('/api/session/ses_1', (_req, res) => {
-      res.json({ id: 'ses_1', location: { directory: '/repo/app' }, title: 'Alpha', metadata: { fromOpenCode: true, shared: 'theirs' } });
+      res.json({ id: 'ses_1', location: { directory: '/repo/app' }, title: 'Alpha', metadata: { fromOpenCode: true, shared: 'theirs', removed: 'stale' } });
+    });
+    upstream.get('/api/session/ses_2', (_req, res) => {
+      res.json({ id: 'ses_2', metadata: { openchamber: { reviewSessionID: 'ses_old' } } });
     });
     upstreamServer = await listen(upstream);
     const upstreamPort = upstreamServer.address().port;
@@ -609,19 +613,25 @@ describe('OpenCode proxy SSE forwarding', () => {
       buildOpenCodeUrl: (requestPath) => `${externalBaseUrl}${requestPath}`,
       ensureOpenCodeApiPrefix: () => {},
       getArchivedSessions: async () => ({ ses_1: 4242 }),
-      getStoredSessionMetadata: async () => ({ ses_1: { openchamber: { goal: { status: 'active' } }, shared: 'ours' } }),
+      getStoredSessionMetadata: async () => ({
+        ses_1: { fromOpenCode: true, openchamber: { goal: { status: 'active' } }, shared: 'ours' },
+        ses_2: {},
+      }),
     });
     proxyServer = await listen(app);
     const proxyPort = proxyServer.address().port;
 
     const list = await (await fetch(`http://127.0.0.1:${proxyPort}/api/session`)).json();
-    // Ours wins per key; a session with no stored state loses the archive flag
-    // OpenCode still carries, because OpenChamber is the authority for it now.
+    // The seeded metadata includes unchanged upstream fields but excludes
+    // deleted keys. Empty metadata is authoritative too.
     expect(list.data[0]).toMatchObject({
       id: 'ses_1',
       time: { created: 1, updated: 2, archived: 4242 },
       metadata: { fromOpenCode: true, shared: 'ours', openchamber: { goal: { status: 'active' } } },
     });
+    expect(list.data[0].metadata).not.toHaveProperty('removed');
+    expect(list.data[1].metadata).toEqual({});
+    expect(list.data[2].metadata).toEqual({ untouched: true });
     // The archive file does not mention ses_2, so the stamp OpenCode carries
     // (a session migrated from v1) stays as it is.
     expect(list.data[1].time).toEqual({ created: 1, updated: 3, archived: 999 });
@@ -632,6 +642,9 @@ describe('OpenCode proxy SSE forwarding', () => {
       time: { archived: 4242 },
       metadata: { fromOpenCode: true, shared: 'ours', openchamber: { goal: { status: 'active' } } },
     });
+    expect(detail.metadata).not.toHaveProperty('removed');
+    const cleared = await (await fetch(`http://127.0.0.1:${proxyPort}/api/session/ses_2`)).json();
+    expect(cleared.metadata).toEqual({});
   });
 
   it('forwards unparsed SDK JSON bodies to generic API proxy requests', async () => {

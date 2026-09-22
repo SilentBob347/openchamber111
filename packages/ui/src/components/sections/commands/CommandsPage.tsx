@@ -86,7 +86,13 @@ export const CommandsPage: React.FC = () => {
   // What the command file currently holds; a save writes only the difference.
   const savedRef = React.useRef<CommandFormState | null>(null);
 
+  const formIdentity = JSON.stringify([settingsDirectory, selectedCommandName]);
+  const formIdentityRef = React.useRef<string | null>(null);
+  const writeEchoRef = React.useRef<{ identity: string; form: CommandFormState } | null>(null);
+
   React.useEffect(() => {
+    const sameCommand = formIdentityRef.current === formIdentity;
+    formIdentityRef.current = formIdentity;
     if (isNewCommand && commandDraft) {
       const draftNameValue = commandDraft.name || '';
       const draftScopeValue = commandDraft.scope || 'user';
@@ -124,18 +130,19 @@ export const CommandsPage: React.FC = () => {
       const variantValue = parsedModel?.variant || '';
       const subagentValue = selectedCommand.subagent === true;
       const templateValue = selectedCommand.template || '';
-      const saved = savedRef.current;
+      const pending = writeEchoRef.current;
+      const echoes = [savedRef.current, pending?.identity === formIdentity ? pending.form : null];
       // OpenCode re-reads the file right after our own write, so the store
       // echoes back what we just saved. Only a genuinely different server
       // value is allowed to replace what the user has in the form.
       if (
-        saved &&
-        saved.description === descriptionValue &&
-        saved.agent === agentValue &&
-        saved.model === modelValue &&
-        saved.variant === variantValue &&
-        saved.subagent === subagentValue &&
-        saved.template === templateValue
+        sameCommand && echoes.some((saved) => saved &&
+          saved.description === descriptionValue &&
+          saved.agent === agentValue &&
+          saved.model === modelValue &&
+          saved.variant === variantValue &&
+          saved.subagent === subagentValue &&
+          saved.template === templateValue)
       ) {
         return;
       }
@@ -157,7 +164,7 @@ export const CommandsPage: React.FC = () => {
         template: templateValue,
       };
     }
-  }, [selectedCommand, isNewCommand, selectedCommandName, commands, commandDraft]);
+  }, [selectedCommand, isNewCommand, selectedCommandName, commands, commandDraft, formIdentity]);
 
   const buildConfig = React.useCallback((commandName: string): CommandConfig => {
     const trimmedAgent = agent.trim();
@@ -188,26 +195,47 @@ export const CommandsPage: React.FC = () => {
     if (isNewCommand || !saved || !commandName) return AUTOSAVE_UNCHANGED;
 
     const unchanged =
-      description === saved.description &&
-      agent === saved.agent &&
-      model === saved.model &&
-      variant === saved.variant &&
+      description.trim() === saved.description.trim() &&
+      agent.trim() === saved.agent.trim() &&
+      model.trim() === saved.model.trim() &&
+      variant.trim() === saved.variant.trim() &&
       subagent === saved.subagent &&
-      template === saved.template;
+      template.trim() === saved.template.trim();
     if (unchanged) return AUTOSAVE_UNCHANGED;
 
     if (!template.trim()) {
       return autosaveFailed(t('settings.commands.page.toast.templateRequired'));
     }
 
-    const success = await updateCommand(commandName, buildConfig(commandName), settingsDirectory);
-    if (!success) {
-      return autosaveFailed(t('settings.commands.page.toast.updateFailed'));
+    const config = buildConfig(commandName);
+    const parsedModel = parseModelSelection(config.model);
+    const pending = {
+      identity: formIdentity,
+      form: {
+        ...saved,
+        description: config.description || '',
+        agent: config.agent || '',
+        model: parsedModel ? `${parsedModel.providerID}/${parsedModel.modelID}` : '',
+        variant: parsedModel?.variant || '',
+        subagent: config.subagent === true,
+        template: config.template || '',
+      },
+    };
+    // The store publishes its reload before updateCommand resolves.
+    writeEchoRef.current = pending;
+    try {
+      const success = await updateCommand(commandName, config, settingsDirectory);
+      if (!success) {
+        return autosaveFailed(t('settings.commands.page.toast.updateFailed'));
+      }
+      if (formIdentityRef.current === formIdentity) {
+        savedRef.current = pending.form;
+      }
+      return AUTOSAVE_SAVED;
+    } finally {
+      if (writeEchoRef.current === pending) writeEchoRef.current = null;
     }
-
-    savedRef.current = { ...saved, description, agent, model, variant, subagent, template };
-    return AUTOSAVE_SAVED;
-  }, [agent, buildConfig, description, isNewCommand, model, selectedCommandName, settingsDirectory, subagent, t, template, updateCommand, variant]);
+  }, [agent, buildConfig, description, formIdentity, isNewCommand, model, selectedCommandName, settingsDirectory, subagent, t, template, updateCommand, variant]);
 
   const autosave = useAutosave(save);
   const { requestSave } = autosave;

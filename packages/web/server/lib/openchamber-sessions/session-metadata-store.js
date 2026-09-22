@@ -16,12 +16,13 @@
  *
  * A session OpenCode migrated from v1 still carries the metadata v1 wrote onto
  * its record, and a session created through OpenChamber carries what was set
- * at create time. This store never saw either, and the proxy overlays the
- * store per top-level key, so the first write from any feature would replace
- * the whole `openchamber` namespace with its patch alone. The store therefore
- * seeds itself from the OpenCode record the first time it touches a session,
- * inside the same transaction as the read or write that needed it. Every
+ * at create time. The proxy uses stored metadata as the full authoritative
+ * record, so the store must preserve the upstream fields before applying a
+ * feature's first patch. It seeds itself from the OpenCode record on first
+ * access, inside the same transaction as the read or write that needed it. Every
  * reader and writer goes through this store, so nobody can skip the seed.
+ * An empty object remains a stored record: it means metadata was cleared and
+ * must survive reads and restarts without importing the old fields again.
  */
 
 import fsDefault from 'node:fs';
@@ -243,7 +244,7 @@ export const createSessionMetadataStore = ({
   const commit = async (id, next) => {
     const had = entries.has(id);
     const previous = entries.get(id);
-    if (next === undefined || Object.keys(next).length === 0) entries.delete(id);
+    if (next === undefined) entries.delete(id);
     else entries.set(id, next);
     try {
       await persist();
