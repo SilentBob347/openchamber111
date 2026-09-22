@@ -184,6 +184,7 @@ import { LinkedReferenceRow } from './composer/ui/LinkedReferenceRow';
 import { RevertedMessageDock } from './composer/ui/RevertedMessageDock';
 import { SessionSuggestionChip } from '@/components/chat/SessionSuggestionChip';
 import { FormDock } from '@/components/chat/FormDock';
+import { PermissionDock } from '@/components/chat/PermissionDock';
 import { SessionGoalRow } from '@/components/chat/SessionGoalRow';
 import {
     createInputHistoryIdentity,
@@ -197,7 +198,7 @@ import {
     mapInputHistoryEntriesToValues,
     mergeSessionInputHistory,
 } from './inputHistory';
-import { useScopedBlockingForms, useUserMessageHistory } from '@/sync/sync-context';
+import { useScopedBlockingForms, useScopedBlockingPermissions, useUserMessageHistory } from '@/sync/sync-context';
 
 // Lazy like in ChatMessage: a static import would pull the @pierre/diffs and
 // Shiki stacks into the eager startup graph for a dialog opened on demand.
@@ -458,7 +459,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     // visible) while the composer talks to the main session again.
     const btwPanel = useBtwPanelState(currentSessionId, currentSessionDirectoryForSync ?? currentDirectory ?? undefined);
     const pendingForms = useScopedBlockingForms(currentSessionId, currentSessionDirectoryForSync ?? currentDirectory ?? undefined);
-    const hasPendingForm = pendingForms.length > 0;
+    const pendingPermissions = useScopedBlockingPermissions(currentSessionId, currentSessionDirectoryForSync ?? currentDirectory ?? undefined);
+    const hasPendingPermission = pendingPermissions.length > 0;
+    // A pending permission or form owns the dock; the composer is not for sending then.
+    const hasPendingForm = pendingForms.length > 0 || hasPendingPermission;
     const btwSessionId = btwPanel.btwSessionId;
     const btwDirectory = btwPanel.btwDirectory;
     const btwComposerSessionId = btwPanel.pending && currentSessionId
@@ -3963,12 +3967,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     className={cn('chat-input-column mt-4', draftPresentationClassName)}
                 />
             ) : null}
-            {/* The agent's question outranks the queue: BTW, then the form,
-                then the queue, then the suggestion. */}
-            <FormDock
+            {/* The agent's requests outrank the queue: BTW, then a permission,
+                then the form, then the queue, then the suggestion. */}
+            <PermissionDock
                 sessionId={currentSessionId}
                 directory={currentSessionDirectoryForSync ?? currentDirectory ?? undefined}
                 hidden={newSessionDraftOpen || isBtwActive || isBtwPanelVisible}
+            />
+            <FormDock
+                sessionId={currentSessionId}
+                directory={currentSessionDirectoryForSync ?? currentDirectory ?? undefined}
+                hidden={newSessionDraftOpen || isBtwActive || isBtwPanelVisible || hasPendingPermission}
             />
             <QueuedMessageChips
                 key={parentMessageQueueKey}

@@ -17,8 +17,8 @@ animation. Do not restore separate draft and session composer branches:
 remounting the editor loses focus and interrupts the transition. Keep the
 existing mobile fixed-position rules unchanged.
 
-`ComposerFloatingPanel` is the shared frame for `BtwPanel`, `FormDock` and
-`QueuedMessageChips`. They mount inside the composer form, outside both the
+`ComposerFloatingPanel` is the shared frame for `BtwPanel`, `PermissionDock`,
+`FormDock` and `QueuedMessageChips`. They mount inside the composer form, outside both the
 full editor and collapsed mobile pill, with one absolute `bottom-full`
 anchor, input-column width, gap, and glass surface. Appearing, disappearing,
 or collapsing a panel does not resize the transcript or composer.
@@ -35,6 +35,16 @@ question still open jumps to it. It shows the
 oldest pending form and counts the rest in its header. The BTW sheet keeps
 the inline `FormCard` for its child session's forms; both render a field
 through `FormFieldControl`.
+
+`PermissionDock` is the agent's permission requests for the composer's
+session, its subagents' included, in the same frame: one dot per pending
+request with the current one solid, the request's tool in the header, and
+Deny / Always allow / Allow once through the shared response hook, so
+Alt+Enter, Alt+Shift+Enter and Alt+Backspace answer the current request. A
+pending permission hides the form dock, the queue chips and the suggestion.
+The BTW sheet keeps the inline `PermissionCard` for its child session's
+requests; both render the request through `PermissionRequestContent` and
+`PermissionActions`.
 
 `SessionSuggestionChip` is not a frame: it renders as the composer's own top
 row, inside the box and inside the mobile pill, so the surface stays one

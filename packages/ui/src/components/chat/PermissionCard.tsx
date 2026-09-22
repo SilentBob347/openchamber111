@@ -8,6 +8,7 @@ import * as sessionActions from '@/sync/session-actions';
 import { WorkerHighlightedCode } from '@/components/code/WorkerHighlightedCode';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Icon } from "@/components/icon/Icon";
+import { Button } from '@/components/ui/button';
 import { DiffPreview, WritePreview } from './DiffPreview';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { getVisiblePermissionPatterns } from './permissionCardPatterns';
@@ -103,6 +104,13 @@ const getToolDisplayName = (toolName: string): string => {
   return toolName;
 };
 
+/** Icon and short name of the capability a request asks for, for headers. */
+export const getPermissionToolPresentation = (permission: PermissionRequest): { icon: React.ReactNode; name: string } => {
+  // v2 names the requested capability `action` (`shell`, `edit`, `webfetch`, ...).
+  const toolName = permission.action || 'unknown';
+  return { icon: getToolIcon(toolName), name: getToolDisplayName(toolName) };
+};
+
 const SAFETY_KIND_LABEL_KEYS = new Map<string, I18nKey>([
   ['read_only', 'routing.safetyKind.readOnly'],
   ['writes_project', 'routing.safetyKind.writesProject'],
@@ -115,27 +123,32 @@ const SAFETY_KIND_LABEL_KEYS = new Map<string, I18nKey>([
 
 const safetyKindLabelKey = (kind: string): I18nKey => SAFETY_KIND_LABEL_KEYS.get(kind) ?? 'routing.safetyKind.unknown';
 
-export const PermissionCard: React.FC<PermissionCardProps> = ({
-  permission,
-  onResponse
-}) => {
-  const { t } = useI18n();
-  const [isResponding, setIsResponding] = React.useState(false);
-  const [hasResponded, setHasResponded] = React.useState(false);
-  const respondToPermission = sessionActions.respondToPermission;
+/** The request was raised by a child of the session the user is looking at. */
+export const usePermissionFromSubagent = (permission: PermissionRequest): boolean => {
   const sessions = useSessions();
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
-  // Set while the routing safety net stopped auto-accept for this request.
-  const held = useRoutingStore((state) => state.held[permission.id] ?? null);
-  const isFromSubagent = React.useMemo(() => {
+  return React.useMemo(() => {
     if (!currentSessionId || permission.sessionID === currentSessionId) return false;
     const sourceSession = sessions.find((session) => session.id === permission.sessionID);
     return Boolean(sourceSession?.parentID && sourceSession.parentID === currentSessionId);
   }, [permission.sessionID, currentSessionId, sessions]);
+};
 
-  const handleResponse = async (response: PermissionReply) => {
+/**
+ * Replies to one request and owns its keyboard shortcuts while it is the
+ * newest pending one: Alt+Enter allows once, Alt+Shift+Enter always,
+ * Alt+Backspace denies. Shared by the inline card and the dock.
+ */
+export const usePermissionResponse = (
+  permission: PermissionRequest,
+  onResponse?: (response: PermissionReply) => void,
+) => {
+  const [isResponding, setIsResponding] = React.useState(false);
+  const [hasResponded, setHasResponded] = React.useState(false);
+  const respondToPermission = sessionActions.respondToPermission;
+
+  const respond = React.useCallback(async (response: PermissionReply) => {
     setIsResponding(true);
-
     try {
       await respondToPermission(permission.sessionID, permission.id, response);
       setHasResponded(true);
@@ -145,10 +158,10 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
     } finally {
       setIsResponding(false);
     }
-  };
+  }, [onResponse, permission.id, permission.sessionID, respondToPermission]);
 
-  const handleResponseRef = React.useRef(handleResponse);
-  handleResponseRef.current = handleResponse;
+  const respondRef = React.useRef(respond);
+  respondRef.current = respond;
 
   React.useEffect(() => {
     if (hasResponded) return;
@@ -164,7 +177,7 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
       if (!response) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleResponseRef.current(response);
+      void respondRef.current(response);
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => {
@@ -174,10 +187,14 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
     };
   }, [hasResponded, permission.id]);
 
-  if (hasResponded) {
-    return null;
-  }
+  return { isResponding, hasResponded, respond };
+};
 
+/** The safety-net hold notice and what the request wants to do. */
+export const PermissionRequestContent: React.FC<{ permission: PermissionRequest }> = ({ permission }) => {
+  const { t } = useI18n();
+  // Set while the routing safety net stopped auto-accept for this request.
+  const held = useRoutingStore((state) => state.held[permission.id] ?? null);
   // v2 names the requested capability `action` (`shell`, `edit`, `webfetch`, ...).
   // A `write` asks for the `edit` action, so both land on the edit branch.
   const toolName = permission.action || 'unknown';
@@ -267,7 +284,7 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
         <>
           {replaceAll && (
             <div className="typography-meta text-muted-foreground mb-2">
-              <span className="font-semibold">⚠️ Replace All Occurrences</span>
+              <span className="font-semibold">{t('chat.permissionCard.replaceAll')}</span>
             </div>
           )}
           {changes && (
@@ -388,173 +405,174 @@ export const PermissionCard: React.FC<PermissionCardProps> = ({
   };
 
   return (
+    <>
+      {held ? (
+        <div className="flex items-start gap-2 px-2 py-1.5 border-b border-border/20 typography-meta text-[var(--status-warning)]">
+          <Icon name="shield-keyhole" className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+          <span>
+            {t('chat.permissionCard.heldBySafetyNet')}
+            {held.kind ? ` · ${t(safetyKindLabelKey(held.kind))}` : ''}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="px-2 py-2">
+        {/* v2 lets the agent explain in its own words why it needs this. */}
+        {permission.message ? (
+          <div className="typography-meta text-foreground/80 mb-2 whitespace-pre-wrap break-words">
+            {permission.message}
+          </div>
+        ) : null}
+
+        {visiblePatterns.length > 0 && (
+          <div className="mb-2">
+            <div className="typography-meta text-muted-foreground mb-1">{t('chat.permissionCard.resources')}</div>
+            <code className="typography-meta px-2 py-1 bg-muted/30 rounded block break-all">
+              {visiblePatterns.join(", ")}
+            </code>
+          </div>
+        )}
+
+        {renderToolContent()}
+      </div>
+    </>
+  );
+};
+
+const alwaysLabel = (permission: PermissionRequest, t: ReturnType<typeof useI18n>['t']): string => {
+  const always = permission.save ?? [];
+  if (always.length === 0) return t('chat.permissionCard.alwaysAllow');
+  const shown = always.slice(0, 2).join(', ');
+  return t('chat.permissionCard.alwaysAllowPatterns', { patterns: always.length > 2 ? `${shown}...` : shown });
+};
+
+/** Allow once / always / deny. The dock uses the shared buttons; the inline card keeps its status-coloured row. */
+export const PermissionActions: React.FC<{
+  permission: PermissionRequest;
+  isResponding: boolean;
+  onRespond: (response: PermissionReply) => void;
+  variant: 'inline' | 'dock';
+}> = ({ permission, isResponding, onRespond, variant }) => {
+  const { t } = useI18n();
+  const hasSave = (permission.save?.length ?? 0) > 0;
+
+  if (variant === 'dock') {
+    return (
+      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2 pt-1">
+        <Button variant="ghost" size="xs" disabled={isResponding} onClick={() => onRespond('reject')} className="text-[var(--status-error)]">
+          <Icon name="close" className="size-3.5" />
+          {t('chat.permissionCard.deny')}
+          <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+backspace')}</kbd>
+        </Button>
+        <div className="min-w-0 flex-1" />
+        <Button variant="outline" size="xs" disabled={isResponding} onClick={() => onRespond('always')} title={hasSave ? alwaysLabel(permission, t) : undefined}>
+          <Icon name="time" className="size-3.5" />
+          <span className="max-w-[180px] truncate">{alwaysLabel(permission, t)}</span>
+          {!hasSave ? <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+shift+enter')}</kbd> : null}
+        </Button>
+        <Button size="xs" disabled={isResponding} onClick={() => onRespond('once')}>
+          {isResponding ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : <Icon name="check" className="size-3.5" />}
+          {t('chat.permissionCard.allowOnce')}
+          <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+enter')}</kbd>
+        </Button>
+      </div>
+    );
+  }
+
+  const rowClass = cn(
+    "flex items-center gap-1.5 sm:gap-1 px-3 sm:px-2 py-1.5 sm:py-1 typography-meta font-medium rounded transition-all min-h-[32px] sm:min-h-0 w-full sm:w-auto",
+    "disabled:opacity-50 disabled:cursor-not-allowed",
+  );
+  const hover = (idle: string, active: string) => ({
+    onMouseEnter: (event: React.MouseEvent<HTMLButtonElement>) => { event.currentTarget.style.backgroundColor = active; },
+    onMouseLeave: (event: React.MouseEvent<HTMLButtonElement>) => { event.currentTarget.style.backgroundColor = idle; },
+  });
+
+  return (
+    <div className="px-2 pb-2 sm:pb-1.5 pt-1.5 sm:pt-1 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-1.5 border-t border-border/20">
+      <button
+        onClick={() => onRespond('once')}
+        disabled={isResponding}
+        className={rowClass}
+        style={{ backgroundColor: 'rgb(var(--status-success) / 0.1)', color: 'var(--status-success)' }}
+        {...hover('rgb(var(--status-success) / 0.1)', 'rgb(var(--status-success) / 0.2)')}
+      >
+        <Icon name="check" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
+        {t('chat.permissionCard.allowOnce')}
+        <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+enter')}</kbd>
+      </button>
+
+      <button
+        onClick={() => onRespond('always')}
+        disabled={isResponding}
+        className={rowClass}
+        style={{ backgroundColor: 'rgb(var(--muted) / 0.5)', color: 'var(--muted-foreground)' }}
+        {...hover('rgb(var(--muted) / 0.5)', 'rgb(var(--muted) / 0.7)')}
+      >
+        <Icon name="time" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
+        <span className="truncate max-w-[180px]">{alwaysLabel(permission, t)}</span>
+        {!hasSave ? <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+shift+enter')}</kbd> : null}
+      </button>
+
+      <button
+        onClick={() => onRespond('reject')}
+        disabled={isResponding}
+        className={rowClass}
+        style={{ backgroundColor: 'rgb(var(--status-error) / 0.1)', color: 'var(--status-error)' }}
+        {...hover('rgb(var(--status-error) / 0.1)', 'rgb(var(--status-error) / 0.2)')}
+      >
+        <Icon name="close" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
+        {t('chat.permissionCard.deny')}
+        <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+backspace')}</kbd>
+      </button>
+
+      {isResponding && (
+        <div className="flex justify-center w-full sm:w-auto sm:ml-auto py-1 sm:py-0 typography-meta text-muted-foreground">
+          <div className="animate-spin h-3 w-3 border border-primary border-t-transparent rounded-full" />
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** The inline card the BTW sheet shows for its child session's requests. */
+export const PermissionCard: React.FC<PermissionCardProps> = ({ permission, onResponse }) => {
+  const { t } = useI18n();
+  const { isResponding, hasResponded, respond } = usePermissionResponse(permission, onResponse);
+  const isFromSubagent = usePermissionFromSubagent(permission);
+  const tool = getPermissionToolPresentation(permission);
+
+  if (hasResponded) {
+    return null;
+  }
+
+  return (
     <div className="group w-full pt-0 pb-2">
       <div className="chat-column">
         <div className="-mt-1 border border-border/30 rounded-xl bg-muted/10">
-          {}
           <div className="px-2 py-1.5 border-b border-border/20 bg-muted/5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Icon name="question" className="h-3.5 w-3.5 text-[var(--status-warning)]" />
                 <span className="typography-meta font-medium text-muted-foreground">
-                  Permission Required
+                  {t('chat.permissionCard.title')}
                 </span>
                 {isFromSubagent ? (
                   <span className="typography-micro text-muted-foreground px-1.5 py-0.5 rounded bg-foreground/5">
-                    From subagent
+                    {t('chat.questionCard.fromSubagent')}
                   </span>
                 ) : null}
               </div>
               <div className="flex items-center gap-1.5">
-                {getToolIcon(toolName)}
-                <span className="typography-meta text-muted-foreground font-medium">{displayToolName}</span>
+                {tool.icon}
+                <span className="typography-meta text-muted-foreground font-medium">{tool.name}</span>
               </div>
             </div>
           </div>
 
-          {held ? (
-            <div className="flex items-start gap-2 px-2 py-1.5 border-b border-border/20 typography-meta text-[var(--status-warning)]">
-              <Icon name="shield-keyhole" className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-              <span>
-                {t('chat.permissionCard.heldBySafetyNet')}
-                {held.kind ? ` · ${t(safetyKindLabelKey(held.kind))}` : ''}
-              </span>
-            </div>
-          ) : null}
+          <PermissionRequestContent permission={permission} />
 
-          {}
-          <div className="px-2 py-2">
-            {/* v2 lets the agent explain in its own words why it needs this. */}
-            {permission.message ? (
-              <div className="typography-meta text-foreground/80 mb-2 whitespace-pre-wrap break-words">
-                {permission.message}
-              </div>
-            ) : null}
-
-            {visiblePatterns.length > 0 && (
-              <div className="mb-2">
-                <div className="typography-meta text-muted-foreground mb-1">{t('chat.permissionCard.resources')}</div>
-                <code className="typography-meta px-2 py-1 bg-muted/30 rounded block break-all">
-                  {visiblePatterns.join(", ")}
-                </code>
-              </div>
-            )}
-
-            {renderToolContent()}
-          </div>
-
-          {}
-          <div className="px-2 pb-2 sm:pb-1.5 pt-1.5 sm:pt-1 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-1.5 border-t border-border/20">
-            <button
-              onClick={() => handleResponse('once')}
-              disabled={isResponding}
-              className={cn(
-                "flex items-center gap-1.5 sm:gap-1 px-3 sm:px-2 py-1.5 sm:py-1 typography-meta font-medium rounded transition-all min-h-[32px] sm:min-h-0 w-full sm:w-auto",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
-              )}
-              style={{
-                backgroundColor: 'rgb(var(--status-success) / 0.1)',
-                color: 'var(--status-success)'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgb(var(--status-success) / 0.2)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgb(var(--status-success) / 0.1)';
-              }}
-            >
-              <Icon name="check" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
-              Allow Once
-              <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+enter')}</kbd>
-            </button>
-
-            {(permission.save?.length ?? 0) > 0 ? (
-              <button
-                onClick={() => handleResponse('always')}
-                disabled={isResponding}
-                className={cn(
-                  "flex items-center gap-1.5 sm:gap-1 px-3 sm:px-2 py-1.5 sm:py-1 typography-meta font-medium rounded transition-all min-h-[32px] sm:min-h-0 w-full sm:w-auto",
-                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                )}
-                style={{
-                  backgroundColor: 'rgb(var(--muted) / 0.5)',
-                  color: 'var(--muted-foreground)'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgb(var(--muted) / 0.7)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgb(var(--muted) / 0.5)';
-                }}
-              >
-                <Icon name="time" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
-                {(() => {
-                  const always = permission.save ?? [];
-                  if (always.length === 0) return "Always Allow";
-                  const displayPatterns = always.slice(0, 2);
-                  const text = displayPatterns.join(", ");
-                  const hasMore = always.length > 2;
-                  return (
-                    <span className="truncate max-w-[180px]">
-                      {hasMore ? `Always: ${text}...` : `Always: ${text}`}
-                    </span>
-                  );
-                })()}
-              </button>
-            ) : (
-              <button
-                onClick={() => handleResponse('always')}
-                disabled={isResponding}
-                className={cn(
-                  "flex items-center gap-1.5 sm:gap-1 px-3 sm:px-2 py-1.5 sm:py-1 typography-meta font-medium rounded transition-all min-h-[32px] sm:min-h-0 w-full sm:w-auto",
-                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                )}
-                style={{
-                  backgroundColor: 'rgb(var(--muted) / 0.5)',
-                  color: 'var(--muted-foreground)'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgb(var(--muted) / 0.7)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgb(var(--muted) / 0.5)';
-                }}
-              >
-                <Icon name="time" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
-                Always Allow
-                <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+shift+enter')}</kbd>
-              </button>
-            )}
-
-            <button
-              onClick={() => handleResponse('reject')}
-              disabled={isResponding}
-              className={cn(
-                "flex items-center gap-1.5 sm:gap-1 px-3 sm:px-2 py-1.5 sm:py-1 typography-meta font-medium rounded transition-all min-h-[32px] sm:min-h-0 w-full sm:w-auto",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
-              )}
-              style={{
-                backgroundColor: 'rgb(var(--status-error) / 0.1)',
-                color: 'var(--status-error)'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgb(var(--status-error) / 0.2)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgb(var(--status-error) / 0.1)';
-              }}
-            >
-              <Icon name="close" className="h-3.5 w-3.5 sm:h-3 sm:w-3 flex-shrink-0" />
-              Deny
-              <kbd className="ml-1 hidden sm:inline typography-micro opacity-60">{formatShortcutForDisplay('alt+backspace')}</kbd>
-            </button>
-
-            {isResponding && (
-              <div className="flex justify-center w-full sm:w-auto sm:ml-auto py-1 sm:py-0 typography-meta text-muted-foreground">
-                <div className="animate-spin h-3 w-3 border border-primary border-t-transparent rounded-full" />
-              </div>
-            )}
-          </div>
+          <PermissionActions permission={permission} isResponding={isResponding} onRespond={(response) => void respond(response)} variant="inline" />
         </div>
       </div>
     </div>

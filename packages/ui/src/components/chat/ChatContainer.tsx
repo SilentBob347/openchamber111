@@ -38,7 +38,6 @@ const TIMELINE_SETTLE_STABLE_FRAMES = 2;
 const TIMELINE_SETTLE_CAP_MS = 300;
 // Mirrors the oc-chat-hydration-reveal duration in index.css.
 const TIMELINE_REVEAL_FADE_MS = 100;
-import { PermissionCard } from './PermissionCard';
 import { hasActiveFormToolInCurrentTurn, recoverPendingFormWithRetry } from '@/sync/form-recovery';
 import { StatusRowContainer } from './StatusRowContainer';
 import { SessionRecapNote } from '@/components/chat/SessionRecapSpacer';
@@ -203,7 +202,6 @@ type ChatViewportProps = {
     /** The user waited for this session (held or fetched); reveal it with a fade. */
     revealWaited: boolean;
     revealGate: TimelineRevealGate;
-    sessionPermissions: PermissionRequest[];
     isProgrammaticFollowActive: boolean;
     showLoadOlderButton: boolean;
     onLoadOlder: () => void;
@@ -239,7 +237,6 @@ const ChatViewport = React.memo(({
     endPinningReleased,
     revealWaited,
     revealGate,
-    sessionPermissions,
     isProgrammaticFollowActive,
     showLoadOlderButton,
     onLoadOlder,
@@ -349,15 +346,7 @@ const ChatViewport = React.memo(({
 
     const listFooter = React.useMemo(() => (
         <>
-            {/* Forms dock above the composer (`FormDock`); permissions stay inline. */}
-            {sessionPermissions.length > 0 && (
-                <div>
-                    {sessionPermissions.map((permission) => (
-                        <PermissionCard key={permission.id} permission={permission} />
-                    ))}
-                </div>
-            )}
-
+            {/* Permissions and forms dock above the composer (`PermissionDock`, `FormDock`). */}
             <SessionErrorNotice sessionId={currentSessionId} directory={directory} />
 
             {/* Tail spacer. With a floating composer it reserves the band the
@@ -378,7 +367,7 @@ const ChatViewport = React.memo(({
                 aria-hidden="true"
             />
         </>
-    ), [currentSessionId, directory, floatingComposer, isMobile, sessionPermissions]);
+    ), [currentSessionId, directory, floatingComposer, isMobile]);
 
     // Opening a session paints the timeline as one finished picture: the root
     // stays invisible while any renderer holds a provisional first paint, then
@@ -564,7 +553,6 @@ const ChatViewport = React.memo(({
         && prev.endPinningReleased === next.endPinningReleased
         && prev.revealWaited === next.revealWaited
         && prev.revealGate === next.revealGate
-        && prev.sessionPermissions === next.sessionPermissions
         && prev.isProgrammaticFollowActive === next.isProgrammaticFollowActive
         && prev.showLoadOlderButton === next.showLoadOlderButton
         && prev.onLoadOlder === next.onLoadOlder
@@ -1603,7 +1591,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
                 endPinningReleased={userOwnsScroll}
                 revealWaited={revealWaited}
                 revealGate={revealGate}
-                sessionPermissions={sessionPermissions}
                 isProgrammaticFollowActive={isFollowingProgrammatically}
                 showLoadOlderButton={showLoadOlderButton}
                 onLoadOlder={handleLoadOlderClick}
