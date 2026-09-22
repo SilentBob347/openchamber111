@@ -775,7 +775,11 @@ const getTaskSummaryLabel = (entry: TaskToolSummaryEntry): string => {
     }
 
     const described = toolDescription(entry.tool, entry.state?.input, undefined);
-    // Subagent child calls never describe with a count, so no translation is needed here.
+    if (described?.kind === 'files') {
+        const names = described.files.slice(0, 3).map((path) => path.split(/[\\/]/).pop() || path);
+        const remaining = described.files.length - names.length;
+        return `${names.join(', ')}${remaining > 0 ? ` +${remaining}` : ''}`;
+    }
     return described && (described.kind === 'path' || described.kind === 'text') ? described.value.trim() : '';
 };
 

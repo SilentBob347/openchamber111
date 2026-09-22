@@ -96,13 +96,6 @@ const sortPartsByTime = (parts: TurnActivityPart[]): TurnActivityPart[] => parts
 /**
  * Extract a short filename from a tool part's input (for aggregation display).
  */
-const SHORT_DESCRIPTION_FILES_MAX = 3;
-
-const baseName = (filePath: string): string => {
-    const lastSlash = filePath.lastIndexOf('/');
-    return lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
-};
-
 const getToolFileName = (activity: TurnActivityPart): string | null => {
     const part = activity.part as ToolPartType;
     const state = part.state as { input?: Record<string, unknown>; metadata?: Record<string, unknown> } | undefined;
@@ -242,17 +235,6 @@ const getToolShortDescription = (activity: TurnActivityPart): string | null => {
             ? `${described.value.slice(0, SHORT_DESCRIPTION_MAX)}...`
             : described.value;
     }
-    // A patch names its files itself; a grouped row shows their names, not a count.
-    if (described?.kind === 'path') {
-        return baseName(described.value);
-    }
-    if (described?.kind === 'files') {
-        const names = described.files.map(baseName);
-        const shown = names.slice(0, SHORT_DESCRIPTION_FILES_MAX);
-        const rest = names.length - shown.length;
-        return rest > 0 ? `${shown.join(', ')} +${rest}` : shown.join(', ');
-    }
-
     return getToolFileName(activity);
 };
 
