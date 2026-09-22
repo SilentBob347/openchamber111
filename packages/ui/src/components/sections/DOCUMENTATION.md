@@ -127,9 +127,13 @@ rules where the LAST match wins. The user does not think in ordered rules, so
 the editor keeps the v1 mental model: one row per tool with inherit / allow /
 ask / deny, an arrow showing what OpenCode will actually do for that tool right
 now, and resource patterns under an expanded row. `agents/agentPermissionModel.ts`
-translates this view to and from the rule list and owns the ordering (agent
-wildcard first, then each tool's wildcard followed by its patterns), so the user
-never reorders anything. The arrow is computed from OpenCode's built-in defaults
+translates this view to and from the rule list. Because order is part of the
+policy, a save edits the stored list in place: changed effects replace their
+rule where it stands, removed rows drop theirs, rules the view cannot show (an
+`*` action with a resource pattern) pass through untouched, and only new rules
+are inserted (agent wildcard first, a tool's wildcard before its patterns, a
+pattern last), so decisions for tools the user did not touch never change. The
+arrow is computed from OpenCode's built-in defaults
 (`OPENCODE_DEFAULT_RULES`), the global `opencode.json` rules and the agent's
 own wildcard, in that order. v1-only keys (`LEGACY_ACTIONS`) are neither shown
 nor written back.

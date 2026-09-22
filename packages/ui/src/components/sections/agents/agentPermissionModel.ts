@@ -8,9 +8,16 @@ import type { PermissionEffect, PermissionRule } from '@/stores/useAgentsStore';
  * think "what may this agent do with each tool?". So the editor keeps the v1
  * mental model — one row per tool with inherit / allow / ask / deny, plus
  * optional resource patterns under a row — and this module translates that
- * view to and from the rule list. Ordering is the module's job: the agent's
- * wildcard rule first, then per tool its wildcard rule followed by its
- * patterns, so every pattern legitimately overrides the broader rule.
+ * view to and from the rule list.
+ *
+ * Because the last match wins, the ORDER of the stored list is part of the
+ * policy: rebuilding it from the per-tool view would silently change what
+ * OpenCode decides for tools the user never touched. So the model keeps the
+ * list it was read from and a save edits that list in place: a changed effect
+ * replaces the rule where it stands, a removed row drops its rules, rules the
+ * view cannot show (an `*` action with a resource pattern) stay untouched, and
+ * only rules the user newly created are inserted, at a position that changes
+ * nothing but the tool they belong to.
  */
 
 export const EFFECTS: PermissionEffect[] = ['allow', 'ask', 'deny'];
@@ -87,12 +94,18 @@ export interface PermissionModel {
   /** The agent's `*` / `*` rule; null = not set. */
   global: PermissionEffect | null;
   keys: Record<string, KeyState>;
+  /**
+   * The stored rule list this view was read from, in evaluation order.
+   * `serializeRules` edits it rather than rebuilding it. Never mutated.
+   */
+  source: readonly PermissionRule[];
 }
 
-export const emptyModel = (): PermissionModel => ({ global: null, keys: {} });
+export const emptyModel = (): PermissionModel => ({ global: null, keys: {}, source: [] });
 
 export const cloneModel = (model: PermissionModel): PermissionModel => ({
   global: model.global,
+  source: model.source,
   keys: Object.fromEntries(
     Object.entries(model.keys).map(([key, state]) => [
       key,
@@ -104,10 +117,12 @@ export const cloneModel = (model: PermissionModel): PermissionModel => ({
 /**
  * Read the agent's stored rule list into the per-tool view. Legacy v1 keys are
  * dropped here on purpose (see `LEGACY_ACTIONS`). When a tool has several
- * wildcard rules the last one wins, which is also what OpenCode evaluates.
+ * rules for the same resource the last one wins, which is also what OpenCode
+ * evaluates. Rules the view cannot show stay in `source` and are written back
+ * unchanged.
  */
 export const parseRules = (rules: readonly PermissionRule[]): PermissionModel => {
-  const model = emptyModel();
+  const model: PermissionModel = { global: null, keys: {}, source: rules.map((rule) => ({ ...rule })) };
   for (const rule of rules) {
     if (isLegacyAction(rule.action)) continue;
     if (rule.action === '*') {
@@ -127,21 +142,81 @@ export const parseRules = (rules: readonly PermissionRule[]): PermissionModel =>
   return model;
 };
 
+/** A stored rule the per-tool view shows as a row or a pattern under one. */
+const isViewRule = (rule: PermissionRule): boolean => rule.action !== '*' || rule.resource === '*';
+
+const ruleKey = (action: string, resource: string): string => `${action}\u0000${resource}`;
+
 /**
- * Write the per-tool view back as an ordered rule list: the agent's wildcard
- * first, then each tool's wildcard followed by its patterns, so a pattern
- * always overrides the tool's broad rule. Blank patterns are dropped.
+ * The effect the view wants for every (action, resource) it represents. Blank
+ * patterns are dropped; a pattern listed twice keeps its last effect.
  */
-export const serializeRules = (model: PermissionModel): PermissionRule[] => {
-  const rules: PermissionRule[] = [];
-  if (model.global !== null) rules.push({ action: '*', resource: '*', effect: model.global });
-  for (const action of Object.keys(model.keys).sort((a, b) => a.localeCompare(b))) {
-    const state = model.keys[action];
-    if (state.effect !== null) rules.push({ action, resource: '*', effect: state.effect });
+const wantedEffects = (model: PermissionModel): Map<string, PermissionEffect> => {
+  const wanted = new Map<string, PermissionEffect>();
+  if (model.global !== null) wanted.set(ruleKey('*', '*'), model.global);
+  for (const [action, state] of Object.entries(model.keys)) {
+    if (state.effect !== null) wanted.set(ruleKey(action, '*'), state.effect);
     for (const entry of state.patterns) {
       const pattern = entry.pattern.trim();
       if (pattern.length === 0) continue;
-      rules.push({ action, resource: pattern, effect: entry.effect });
+      wanted.set(ruleKey(action, pattern), entry.effect);
+    }
+  }
+  return wanted;
+};
+
+/**
+ * Write the per-tool view back as the stored list with the user's edits
+ * applied in place, so decisions for everything the user did not touch stay
+ * exactly what they were:
+ *
+ * - a rule the view still shows is kept where it stands, with its current effect;
+ * - a rule whose row or pattern the user removed is dropped;
+ * - a rule the view cannot show is kept untouched;
+ * - legacy v1 keys are dropped (see `LEGACY_ACTIONS`);
+ * - a new agent wildcard goes first, so every existing rule still refines it;
+ * - a new tool wildcard goes right before that tool's first existing rule, so
+ *   the tool's patterns keep overriding it; with no such rule it goes last;
+ * - a new pattern goes last, so it wins for the resources it names.
+ */
+export const serializeRules = (model: PermissionModel): PermissionRule[] => {
+  const wanted = wantedEffects(model);
+  const emitted = new Set<string>();
+  const rules: PermissionRule[] = [];
+  for (const rule of model.source) {
+    if (isLegacyAction(rule.action)) continue;
+    if (!isViewRule(rule)) {
+      rules.push({ ...rule });
+      continue;
+    }
+    const key = ruleKey(rule.action, rule.resource);
+    const effect = wanted.get(key);
+    if (effect === undefined) continue;
+    rules.push({ action: rule.action, resource: rule.resource, effect });
+    emitted.add(key);
+  }
+
+  const globalKey = ruleKey('*', '*');
+  if (model.global !== null && !emitted.has(globalKey)) {
+    rules.unshift({ action: '*', resource: '*', effect: model.global });
+  }
+
+  for (const [action, state] of Object.entries(model.keys)) {
+    const wildcardKey = ruleKey(action, '*');
+    if (state.effect !== null && !emitted.has(wildcardKey)) {
+      const firstOfTool = rules.findIndex((rule) => rule.action === action);
+      const wildcard = { action, resource: '*', effect: state.effect };
+      if (firstOfTool >= 0) rules.splice(firstOfTool, 0, wildcard);
+      else rules.push(wildcard);
+    }
+    for (const entry of state.patterns) {
+      const pattern = entry.pattern.trim();
+      if (pattern.length === 0) continue;
+      const key = ruleKey(action, pattern);
+      const effect = wanted.get(key);
+      if (effect === undefined || emitted.has(key)) continue;
+      emitted.add(key);
+      rules.push({ action, resource: pattern, effect });
     }
   }
   return rules;

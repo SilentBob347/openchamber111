@@ -51,7 +51,8 @@ import {
  *
  * Under the hood v2 keeps an ordered rule list where the last match wins;
  * `agentPermissionModel.ts` translates this view to and from that list and
- * owns the ordering, so the user never has to. Saving PATCHes only
+ * applies edits to the stored list in place, so what the user did not touch
+ * keeps deciding exactly as before. Saving PATCHes only
  * `{ permissions }`. There is no Save button: a chip writes straight away, a
  * pattern writes when it loses focus. The write is its own request but the
  * page owns the autosave: `AgentsPage` registers this section's save routine
