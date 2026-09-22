@@ -27,8 +27,10 @@ const closeServer = (server) => new Promise((resolve, reject) => {
 describe('OpenCode proxy SSE forwarding', () => {
   let upstreamServer;
   let proxyServer;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 
   afterEach(async () => {
+    Object.defineProperty(process, 'platform', originalPlatform);
     await closeServer(proxyServer);
     await closeServer(upstreamServer);
     proxyServer = undefined;
@@ -348,7 +350,13 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(Number(data.contentLength)).toBeGreaterThan(0);
   });
 
-  it('sanitizes the global session list and forwards query params', async () => {
+  it.each([
+    ['win32', ''],
+    ['win32', '&directory=%2Flink%2Frepo'],
+    ['linux', ''],
+    ['linux', '&directory=%2Flink%2Frepo'],
+  ])('sanitizes session pages and forwards query params (%s, %s)', async (platform, directoryQuery) => {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
     let seenQuery = null;
     let seenAuth = null;
 
@@ -368,7 +376,7 @@ describe('OpenCode proxy SSE forwarding', () => {
             title: 'Alpha',
             agent: 'build',
             model: { id: 'gpt-5', providerID: 'openai', variant: 'default' },
-            time: { created: 1, updated: 2 },
+            time: { created: 1, updated: 2, archived: 3 },
             cost: 7,
             tokens: { input: 10, output: 20 },
             outcome: 'succeeded',
@@ -409,18 +417,19 @@ describe('OpenCode proxy SSE forwarding', () => {
     proxyServer = await listen(app);
     const proxyPort = proxyServer.address().port;
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/session?archived=false&limit=500&cursor=99&roots=true&directory=%2Flink%2Frepo`);
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/session?archived=false&limit=500&cursor=99&roots=true${directoryQuery}`);
 
     expect(response.status).toBe(200);
     expect(response.headers.get('x-next-cursor')).toBe('123');
     expect(seenAuth).toBe('Bearer session-token');
-    expect(seenQuery).toMatchObject({
+    const expectedQuery = {
       archived: 'false',
       limit: '500',
       cursor: '99',
       roots: 'true',
-      directory: '/real/repo',
-    });
+    };
+    if (directoryQuery) expectedQuery.directory = '/real/repo';
+    expect(seenQuery).toEqual(expectedQuery);
 
     // The heavy parts of a revert and the per-session permission ruleset are
     // dropped; everything the list view reads survives.
@@ -435,7 +444,7 @@ describe('OpenCode proxy SSE forwarding', () => {
           title: 'Alpha',
           agent: 'build',
           model: { id: 'gpt-5', providerID: 'openai', variant: 'default' },
-          time: { created: 1, updated: 2 },
+          time: { created: 1, updated: 2, archived: 3 },
           cost: 7,
           tokens: { input: 10, output: 20 },
           outcome: 'succeeded',
@@ -446,6 +455,37 @@ describe('OpenCode proxy SSE forwarding', () => {
       ],
       cursor: { next: '123' },
     });
+  });
+
+  it.each([
+    [200, { data: [], cursor: {} }],
+    [503, { error: 'Upstream unavailable' }],
+  ])('preserves Windows global list status and empty/error payload (%s)', async (status, payload) => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const upstream = express();
+    upstream.get('/api/session', (_req, res) => res.status(status).json(payload));
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const baseUrl = `http://127.0.0.1:${upstreamPort}`;
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        openCodeBaseUrl: baseUrl,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `${baseUrl}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+    });
+    proxyServer = await listen(app);
+    const response = await fetch(`http://127.0.0.1:${proxyServer.address().port}/api/session?limit=1`);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual(payload);
   });
 
   it('sanitizes session list responses without sanitizing session detail responses', async () => {
