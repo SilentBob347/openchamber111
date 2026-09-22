@@ -258,6 +258,39 @@ describe('custom provider config persistence (VS Code parity)', () => {
     });
   });
 
+  test('renaming a provider keeps canonical and model compatibility', () => {
+    const configPath = path.join(projectDir, '.opencode', 'opencode.json');
+    const compatibility = { reasoningField: 'reasoning_content', requireReasoning: true, maxTokensField: 'max_tokens' };
+    writeJson(configPath, {
+      providers: {
+        'openai-proxy': {
+          canonical: 'openai',
+          name: 'Old name',
+          package: 'aisdk:@ai-sdk/openai-compatible',
+          env: ['PROXY_KEY'],
+          settings: { baseURL: 'https://proxy.example.com/v1' },
+          models: { 'gpt-5': { modelID: 'gpt-5', name: 'GPT-5', compatibility } },
+        },
+      },
+    });
+
+    upsertProviderConfig('openai-proxy', {
+      name: 'New name',
+      env: ['PROXY_KEY'],
+      settings: { baseURL: 'https://proxy.example.com/v1' },
+      models: { 'gpt-5': { name: 'GPT-5' } },
+    }, projectDir, 'project');
+
+    assert.deepEqual(readJson(configPath).providers['openai-proxy'], {
+      canonical: 'openai',
+      name: 'New name',
+      package: 'aisdk:@ai-sdk/openai-compatible',
+      env: ['PROXY_KEY'],
+      settings: { baseURL: 'https://proxy.example.com/v1' },
+      models: { 'gpt-5': { modelID: 'gpt-5', name: 'GPT-5', compatibility } },
+    });
+  });
+
   test('upsertProviderConfig preserves metadata while migrating the legacy providers alias', () => {
     const configPath = path.join(projectDir, 'opencode.json');
     writeJson(configPath, {

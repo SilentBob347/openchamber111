@@ -20,6 +20,7 @@ import {
   writeSectionEntry,
   deleteSectionEntry,
   readMcpEntries,
+  readLayeredMcpEntries,
   writeMcpEntry,
 } from './config-v2.js';
 
@@ -136,6 +137,18 @@ describe('agent entity', () => {
       permissions: [{ action: 'read', resource: '*', effect: 'allow' }],
     };
     expect(toAgentEntity(native)).toEqual(native);
+  });
+
+  it('maps a v1 theme color onto the hex OpenCode migrates it to', () => {
+    // v2 only decodes `#rrggbb`; OpenCode's migration turns anything else into #aaaaaa.
+    expect(toAgentEntity({ color: 'primary' }).color).toBe('#aaaaaa');
+    expect(toAgentEntity({ color: '#abc' }).color).toBe('#aaaaaa');
+    expect(toAgentEntity({ color: '#AABBCC' }).color).toBe('#AABBCC');
+    expect(toAgentEntity({ color: '' }).color).toBeUndefined();
+    expect(fromAgentEntity({ color: 'accent', description: 'A' }).fields).toEqual({
+      color: '#aaaaaa',
+      description: 'A',
+    });
   });
 
   it('lets the markdown body win over a frontmatter system field', () => {
@@ -266,6 +279,21 @@ describe('mcp entity', () => {
     expect(entries.get('shared').value.command).toEqual(['new']);
   });
 
+  it('applies layer precedence after normalizing each layer', () => {
+    // A raw deep merge would leave user `mcp.servers.shared` next to project
+    // `mcp.shared`, and the v2 spelling would then shadow the project override.
+    const user = { mcp: { servers: { shared: { type: 'remote', url: 'https://global' }, only: { type: 'local', command: ['u'] } } } };
+    const project = { mcp: { shared: { type: 'remote', url: 'https://project' } } };
+    const entries = readLayeredMcpEntries([user, project]);
+    expect(entries.get('shared')).toEqual({
+      value: { type: 'remote', url: 'https://project' },
+      key: 'mcp',
+      legacy: true,
+    });
+    expect(entries.get('only').value.command).toEqual(['u']);
+    expect(readLayeredMcpEntries([project, user]).get('shared').value.url).toBe('https://global');
+  });
+
   it('rewrites a v1 mcp entry into mcp.servers in place', () => {
     const config = { mcp: { legacy: { type: 'local', command: ['a'] } } };
     writeMcpEntry(config, 'legacy', { type: 'local', command: ['b'] });
@@ -284,6 +312,37 @@ describe('provider entity', () => {
       settings: { apiKey: '{env:ACME_API_KEY}', baseURL: 'https://llm.example.com/v1' },
       headers: { 'X-A': '1' },
     });
+  });
+
+  it('keeps the v2-only canonical and compatibility fields', () => {
+    const native = {
+      canonical: 'openai',
+      name: 'Proxy',
+      package: 'aisdk:@ai-sdk/openai-compatible',
+      settings: { baseURL: 'https://proxy.example.com/v1' },
+      models: {
+        m: {
+          modelID: 'm',
+          name: 'M',
+          compatibility: { reasoningField: 'reasoning_content', requireReasoning: true, maxTokensField: 'max_tokens' },
+        },
+      },
+    };
+    expect(toProviderEntity(native)).toEqual(native);
+    expect(toProviderEntity({ models: { m: { compatibility: {} } } }).models.m).toEqual({});
+  });
+
+  it('migrates v1 interleaved into compatibility.reasoningField', () => {
+    const models = toProviderEntity({
+      models: {
+        text: { interleaved: 'reasoning_text' },
+        field: { interleaved: { field: 'reasoning' } },
+        flag: { interleaved: true },
+      },
+    }).models;
+    expect(models.text).toEqual({ compatibility: { reasoningField: 'reasoning_text' } });
+    expect(models.field).toEqual({ compatibility: { reasoningField: 'reasoning' } });
+    expect(models.flag).toEqual({});
   });
 
   it('migrates model fields', () => {

@@ -98,10 +98,15 @@ and OpenChamber resolves the directory itself.
 database and never writes the file again; credentials live behind
 `/api/integration` and `/api/credential`, and no HTTP route hands a key back.
 OpenChamber needs the raw credential for provider quota lookups, voice keys and
-the GitHub and Linear helpers, so `readAuthFile()` answers from two sources:
-the database OpenCode actually uses (`credential-db.js`, below), with the
-legacy file underneath for anything the database does not know. A write here
-would be invisible to the running OpenCode, so every write path is gone.
+the GitHub and Linear helpers, so `readAuthFile()` answers from the database
+OpenCode actually uses (`credential-db.js`, below). A successful database read
+is authoritative, `{}` included: OpenCode never clears `auth.json` after the
+import and a credential removed in OpenCode vanishes only from the database,
+so the file is never merged over a readable database. The legacy file is the
+fallback only when the database cannot be read (no sqlite runtime, no file,
+unknown schema); a corrupt file then throws, but never blocks a healthy
+database. A write here would be invisible to the running OpenCode, so every
+write path is gone.
 
 - `readAuthFile()`: The credentials OpenCode uses, keyed by provider id, in the
   legacy `auth.json` entry shape (`{ type: 'api', key }` /
@@ -144,7 +149,13 @@ with the same loader strategy as `credential-db.js` — `node:sqlite` on Node,
 and logs one line; there is no HTTP route and no UI.
 
 What it does: when the migration row says `completed` and some `session` rows
-have no `session_v2` twin, it sets the row to `{"phase":"sessions","cursor":…}`.
+have no `session_v2` twin AND were created after the migration completed
+(`time_created` past the row's `time_updated`), it sets the row to
+`{"phase":"sessions","cursor":…}`. The time test matters because a v2 delete
+leaves the legacy row behind (`Session.remove` publishes `session.deleted`,
+`bus.remove` then wipes that session's durable events, `session_v2` cascades):
+a legacy session the migration already walked and that is absent now was
+deleted, not missed, and is never re-imported.
 The cursor is the largest missing id plus `U+FFFF`, because OpenCode's loop
 walks `id < cursor` in descending id order and ids are fixed width, so nothing
 real can fall between an id and that cursor. Ids are compared the way SQLite
@@ -165,8 +176,14 @@ Two hard rules, both verified against v2.0.8
   sessions below it and looks for a message created after the migration
   completed, a `session_v2.time_updated` after it, or a message `type` the V1
   transform never emits (it only produces `user`, `assistant`, `synthetic`,
-  `compaction`). Any hit and nothing is written: the outcome is `unsafe` and a
-  single warning names how many sessions stay missing.
+  `compaction`). Any hit and nothing is written: the outcome is `unsafe`
+  (`revisited-sessions-have-v2-activity`) and a single warning names how many
+  sessions stay missing.
+- **Never resurrect a session deleted in v2.** OpenCode's loop walks every
+  legacy row under the cursor, so a deleted session sorting below a
+  never-imported one would come back. The top-up refuses that too
+  (`unsafe`, `deleted-sessions-would-return`); the never-imported sessions
+  then stay missing until upstream offers an import route.
 
 ## Public exports (providers.js)
 - `getProviderSources(providerId, workingDirectory)`: Resolves which OpenCode config layers define a provider.
@@ -439,7 +456,7 @@ normalizer applies.
 | Agents | `agents` | `agent` |
 | Commands | `commands` | `command` |
 | Providers | `providers` | `provider` |
-| MCP servers | `mcp.servers` | `mcp.<name>` |
+| MCP servers | `mcp.servers` | `mcp.<name>` (each layer normalized on its own, then custom > project > user; a raw merge would let a user-file `mcp.servers.<name>` shadow a project-file `mcp.<name>` override) |
 | Plugins | `plugins` | `plugin` (including `[spec, options]` tuples) |
 | Permissions | `permissions` rule array | `permission` map, `tools` map |
 
@@ -457,7 +474,12 @@ Two consequences worth knowing:
 - Migrating a v1 provider entry drops the fields v2 accepts but ignores
   (model `reasoning`, `attachment`, non-`deprecated` `status`, and unknown
   custom keys). That is the documented native conversion, not data loss through
-  a bug.
+  a bug. v1 model `interleaved` becomes `compatibility.reasoningField` the way
+  OpenCode's own migration does; the v2-only provider `canonical` and model
+  `compatibility` fields pass through every edit untouched.
+- A v1 agent `color` may be a theme name (`primary`); v2 decodes only
+  `#rrggbb` and OpenCode's migration maps anything else to `#aaaaaa`.
+  `toAgentEntity` applies the same mapping so a rewritten file stays decodable.
 
 ### Canonical entity shapes
 
@@ -505,6 +527,7 @@ re-exports that module so both runtimes write identical files.
 
 // ProviderEntity
 {
+  "canonical": "openai",                 // v2-only: built-in provider this entry inherits from
   "name": "Campus LLM",
   "package": "aisdk:@ai-sdk/openai-compatible",
   "env": ["CAMPUS_KEY"],
@@ -513,6 +536,7 @@ re-exports that module so both runtimes write identical files.
   "models": {
     "fast-model": {
       "modelID": "fast-model", "name": "Fast", "family": "…", "package": "aisdk:…",
+      "compatibility": { "reasoningField": "reasoning_content", "requireReasoning": true, "maxTokensField": "max_tokens" },
       "settings": {}, "headers": {}, "body": {},
       "capabilities": { "tools": true, "input": ["text","image"], "output": ["text"] },
       "variants": [{ "id": "high", "settings": { "reasoningEffort": "high" } }],
@@ -814,7 +838,7 @@ The VS Code extension owns its separate Git and proxy implementation.
 ## Storage and configuration
 - Provider auth: `~/.local/share/opencode/opencode.db` table `credential` (read-only), with `auth.json` as the legacy fallback; OpenCode 2.x owns credentials.
 - Session archive state: `sessions-archive.json` under the OpenChamber data dir.
-- Session metadata OpenChamber owns: `sessions-metadata.json` under the OpenChamber data dir. OpenCode 2.x accepts session metadata only at create time, so goal progress, the assist recap, the obligatory-context cursor and pinned notes live here and the proxy folds them back onto the sessions it serves (ours wins per key).
+- Session metadata OpenChamber owns: `sessions-metadata.json` under the OpenChamber data dir. OpenCode 2.x accepts session metadata only at create time, so goal progress, the assist recap, the obligatory-context cursor and pinned notes live here and the proxy folds them back onto the sessions it serves (ours wins per key). The store is the single owner: every reader and writer (routes, goal loop, session assist, session knowledge, obligatory context, notifications) goes through `sessionMetadataStore.get` / `setSessionMetadata`. A session the store has never held is seeded from OpenCode's record (v1-migrated metadata, or what was set at create time) inside the same transaction as the first read or write; a seed that cannot be read fails that read or write instead of counting as empty, so a patch never replaces the record's namespace. Reads, seeds, mutation, persist and rollback run one transaction at a time, for the archive store too.
 - User config: `<config dir>/opencode.json(c)` where the config dir is `OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`. The v1 `config.json` is not read.
 - Project config: `<workingDirectory>/.opencode/opencode.json(c)` first, else `<workingDirectory>/opencode.json(c)`.
 - Custom config: `OPENCODE_CONFIG` env var path.

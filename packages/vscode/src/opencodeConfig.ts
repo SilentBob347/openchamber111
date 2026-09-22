@@ -22,7 +22,7 @@ import {
   writeSectionEntry,
   deleteSectionEntry,
   readMcpEntry,
-  readMcpEntries,
+  readLayeredMcpEntries,
   writeMcpEntry,
   deleteMcpEntry,
   normalizePermissionRules,
@@ -1369,9 +1369,13 @@ const validateMcpName = (name: string): void => {
   }
 };
 
+/** Same precedence as `getJsonEntrySource`: custom > project > user. */
+const readMcpEntriesAcrossLayers = (layers: ReturnType<typeof readConfigLayers>) =>
+  readLayeredMcpEntries([layers.userConfig, layers.projectConfig, layers.customConfig]);
+
 export const listMcpConfigs = (workingDirectory?: string): McpConfigEntry[] => {
   const layers = readConfigLayers(workingDirectory);
-  return Array.from(readMcpEntries(layers.mergedConfig).entries()).map(([name, entry]) => {
+  return Array.from(readMcpEntriesAcrossLayers(layers).entries()).map(([name, entry]) => {
     const source = getJsonEntrySource(layers, 'mcp', name);
     return {
       name,
@@ -1385,7 +1389,7 @@ export const listMcpConfigs = (workingDirectory?: string): McpConfigEntry[] => {
 
 export const getMcpConfig = (name: string, workingDirectory?: string): McpConfigEntry | null => {
   const layers = readConfigLayers(workingDirectory);
-  const entry = readMcpEntries(layers.mergedConfig).get(name);
+  const entry = readMcpEntriesAcrossLayers(layers).get(name);
   if (!entry) {
     return null;
   }

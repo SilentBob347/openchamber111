@@ -227,6 +227,52 @@ describe('VS Code entity modules speak OpenCode 2 shapes', () => {
     });
   });
 
+  test('rewrites a v1 theme color as the hex OpenCode migrates it to', async () => {
+    const { updateAgent } = await loadConfig();
+    const agentPath = write('.opencode/agent/tinted.md', [
+      '---',
+      'description: Tinted',
+      'color: primary',
+      '---',
+      '',
+      'Prompt.',
+    ].join('\n'));
+
+    updateAgent('tinted', { description: 'Still tinted' }, projectDir);
+
+    assert.deepEqual(readMd(agentPath).frontmatter, { description: 'Still tinted', color: '#aaaaaa' });
+  });
+
+  test('answers the project v1 override when the user file already holds the v2 spelling', async () => {
+    const { getMcpConfig, listMcpConfigs, updateMcpConfig } = await loadConfig();
+    const userConfigPath = path.join(process.env.XDG_CONFIG_HOME as string, 'opencode', 'opencode.json');
+    fs.mkdirSync(path.dirname(userConfigPath), { recursive: true });
+    fs.writeFileSync(userConfigPath, JSON.stringify({
+      mcp: { servers: { docs: { type: 'remote', url: 'https://global.example.com/mcp' } } },
+    }, null, 2), 'utf8');
+    const projectConfigPath = write('.opencode/opencode.json', JSON.stringify({
+      mcp: { docs: { type: 'remote', url: 'https://project.example.com/mcp', timeout: 5000 } },
+    }, null, 2));
+
+    try {
+      const entry = getMcpConfig('docs', projectDir);
+      assert.equal(entry?.type === 'remote' ? entry.url : null, 'https://project.example.com/mcp');
+      assert.equal(entry?.scope, 'project');
+      assert.equal(entry?.legacy, true);
+      const listed = listMcpConfigs(projectDir).find((item) => item.name === 'docs');
+      assert.equal(listed?.type === 'remote' ? listed.url : null, 'https://project.example.com/mcp');
+
+      updateMcpConfig('docs', { timeout: { catalog: 9000, execution: 9000 } }, projectDir);
+
+      assert.deepEqual(readJson(projectConfigPath).mcp, {
+        servers: { docs: { type: 'remote', url: 'https://project.example.com/mcp', timeout: { catalog: 9000, execution: 9000 } } },
+      });
+      assert.equal(readJson(userConfigPath).mcp.servers.docs.url, 'https://global.example.com/mcp');
+    } finally {
+      fs.rmSync(userConfigPath, { force: true });
+    }
+  });
+
   test('reads a v1 mcp entry and rewrites it under mcp.servers in the same file', async () => {
     const { getMcpConfig, updateMcpConfig } = await loadConfig();
     const configPath = write('opencode.json', JSON.stringify({

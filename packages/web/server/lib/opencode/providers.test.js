@@ -240,6 +240,50 @@ describe('custom provider config persistence', () => {
     });
   });
 
+  test('renaming a provider keeps canonical and model compatibility', () => {
+    const configPath = path.join(projectDir, '.opencode', 'opencode.json');
+    writeJson(configPath, {
+      providers: {
+        'openai-proxy': {
+          canonical: 'openai',
+          name: 'Old name',
+          package: 'aisdk:@ai-sdk/openai-compatible',
+          env: ['PROXY_KEY'],
+          settings: { baseURL: 'https://proxy.example.com/v1' },
+          models: {
+            'gpt-5': {
+              modelID: 'gpt-5',
+              name: 'GPT-5',
+              compatibility: { reasoningField: 'reasoning_content', requireReasoning: true, maxTokensField: 'max_tokens' },
+            },
+          },
+        },
+      },
+    });
+
+    upsertProviderConfig('openai-proxy', {
+      name: 'New name',
+      env: ['PROXY_KEY'],
+      settings: { baseURL: 'https://proxy.example.com/v1' },
+      models: { 'gpt-5': { name: 'GPT-5' } },
+    }, projectDir, 'project');
+
+    expect(readJson(configPath).providers['openai-proxy']).toEqual({
+      canonical: 'openai',
+      name: 'New name',
+      package: 'aisdk:@ai-sdk/openai-compatible',
+      env: ['PROXY_KEY'],
+      settings: { baseURL: 'https://proxy.example.com/v1' },
+      models: {
+        'gpt-5': {
+          modelID: 'gpt-5',
+          name: 'GPT-5',
+          compatibility: { reasoningField: 'reasoning_content', requireReasoning: true, maxTokensField: 'max_tokens' },
+        },
+      },
+    });
+  });
+
   test('accepts a native v2 payload and keeps the entry in providers', () => {
     const configPath = path.join(projectDir, '.opencode', 'opencode.json');
     writeJson(configPath, {

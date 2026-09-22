@@ -11,7 +11,7 @@ import {
 } from './shared.js';
 import {
   toMcpEntity,
-  readMcpEntries,
+  readLayeredMcpEntries,
   writeMcpEntry,
   deleteMcpEntry,
 } from './config-v2.js';
@@ -48,9 +48,14 @@ function ensureProjectMcpConfigPath(workingDirectory) {
   return path.join(configDir, 'opencode.json');
 }
 
+/** Same precedence as `getJsonEntrySource`: custom > project > user. */
+function readMcpEntriesAcrossLayers(layers) {
+  return readLayeredMcpEntries([layers?.userConfig, layers?.projectConfig, layers?.customConfig]);
+}
+
 function listMcpConfigs(workingDirectory) {
   const layers = readConfigLayers(workingDirectory);
-  return Array.from(readMcpEntries(layers?.mergedConfig).entries()).map(([name, entry]) => {
+  return Array.from(readMcpEntriesAcrossLayers(layers).entries()).map(([name, entry]) => {
     const source = getJsonEntrySource(layers, 'mcp', name);
     return {
       name,
@@ -67,7 +72,7 @@ function listMcpConfigs(workingDirectory) {
  */
 function getMcpConfig(name, workingDirectory) {
   const layers = readConfigLayers(workingDirectory);
-  const entry = readMcpEntries(layers?.mergedConfig).get(name);
+  const entry = readMcpEntriesAcrossLayers(layers).get(name);
 
   if (!entry) {
     return null;

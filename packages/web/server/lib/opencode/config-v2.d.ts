@@ -64,10 +64,20 @@ export interface McpEntity {
   timeout?: McpTimeout;
 }
 
+export interface ModelCompatibility {
+  reasoningField?: string;
+  requireReasoning?: boolean;
+  maxTokensField?: 'max_completion_tokens' | 'max_tokens';
+  requireFinishReason?: boolean;
+  requireAssistantAfterTool?: boolean;
+  supportsPromptCacheKey?: boolean;
+}
+
 export interface ProviderModelEntity {
   modelID?: string;
   name?: string;
   family?: string;
+  compatibility?: ModelCompatibility;
   package?: string;
   settings?: Record<string, unknown>;
   headers?: Record<string, string>;
@@ -80,6 +90,7 @@ export interface ProviderModelEntity {
 }
 
 export interface ProviderEntity {
+  canonical?: string;
   name?: string;
   package?: string;
   env?: string[];
@@ -144,6 +155,7 @@ export function isLegacyCommandFrontmatter(frontmatter: unknown): boolean;
 export function toMcpEntity(raw: unknown): McpEntity;
 export function readMcpEntry(config: unknown, name: string): SectionLookup;
 export function readMcpEntries(config: unknown): Map<string, SectionLookup>;
+export function readLayeredMcpEntries(configs: unknown[]): Map<string, SectionLookup>;
 export function writeMcpEntry(config: Record<string, unknown>, name: string, value: unknown): string;
 export function deleteMcpEntry(config: Record<string, unknown>, name: string): boolean;
 

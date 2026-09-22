@@ -243,6 +243,22 @@ const AGENT_NATIVE_KEYS = new Set([
 
 const AGENT_REQUEST_BODY_KEYS = ['temperature', 'top_p'];
 
+const AGENT_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+const AGENT_COLOR_FALLBACK = '#aaaaaa';
+
+/**
+ * v2 accepts only a six-digit hex color (`schema/src/config/agent.ts`). v1
+ * also allowed theme names (`primary`, ...); OpenCode's own migration
+ * (`core/src/v1/config/migrate.ts`) turns those into `#aaaaaa`, so a record
+ * OpenChamber rewrites stays decodable instead of being skipped.
+ */
+function toAgentColor(value) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return AGENT_COLOR_PATTERN.test(trimmed) ? trimmed : AGENT_COLOR_FALLBACK;
+}
+
 function pickDefined(entries) {
   return Object.fromEntries(entries.filter(([, value]) => value !== undefined && value !== null));
 }
@@ -290,7 +306,7 @@ function toAgentEntity(raw, body) {
     ['model', model],
     ['mode', ['primary', 'subagent', 'all'].includes(source.mode) ? source.mode : undefined],
     ['hidden', typeof source.hidden === 'boolean' ? source.hidden : undefined],
-    ['color', typeof source.color === 'string' ? source.color : undefined],
+    ['color', toAgentColor(source.color)],
     ['steps', steps],
     ['disabled', disabled],
     ['request', normalizeRequest(source.request, source)],
@@ -480,6 +496,20 @@ function readMcpEntries(config) {
   return result;
 }
 
+/**
+ * MCP entries across config layers, lowest precedence first. Each layer is
+ * normalized on its own before precedence applies: merging the raw objects
+ * first would let a v2 `mcp.servers.<name>` in the user file shadow a v1
+ * `mcp.<name>` override in the project file.
+ */
+function readLayeredMcpEntries(configs) {
+  const result = new Map();
+  for (const config of configs) {
+    for (const [name, entry] of readMcpEntries(config)) result.set(name, entry);
+  }
+  return result;
+}
+
 function writeMcpEntry(config, name, value) {
   if (!isRecord(config.mcp)) config.mcp = {};
   if (!isRecord(config.mcp.servers)) config.mcp.servers = {};
@@ -576,6 +606,21 @@ function toModelCost(value) {
   ]);
 }
 
+/**
+ * v2 `compatibility` passes through; v1 `interleaved` migrates the way
+ * OpenCode does (`core/src/model.ts` `compatibility()`): a string or
+ * `{field}` names the reasoning field, a boolean carries nothing.
+ */
+function toModelCompatibility(source) {
+  if (isRecord(source.compatibility)) {
+    return Object.keys(source.compatibility).length ? { ...source.compatibility } : undefined;
+  }
+  const interleaved = source.interleaved;
+  if (typeof interleaved === 'string') return interleaved ? { reasoningField: interleaved } : undefined;
+  if (isRecord(interleaved) && typeof interleaved.field === 'string') return { reasoningField: interleaved.field };
+  return undefined;
+}
+
 /** Canonical v2 model entry: `modelID`, `capabilities`, `cache.read/write`, variants array. */
 function toProviderModelEntity(raw) {
   const source = isRecord(raw) ? raw : {};
@@ -585,6 +630,7 @@ function toProviderModelEntity(raw) {
     ['modelID', trimmedString(source.modelID ?? source.id)],
     ['name', trimmedString(source.name)],
     ['family', trimmedString(source.family)],
+    ['compatibility', toModelCompatibility(source)],
     ['package', toProviderPackage(source.package ?? source.provider?.npm)],
     ['settings', source.provider?.api ? { ...(settings ?? {}), baseURL: source.provider.api } : settings],
     ['headers', cleanStringMap(source.headers)],
@@ -610,6 +656,8 @@ function toProviderEntity(raw) {
     ? Object.fromEntries(Object.entries(source.models).map(([id, model]) => [id, toProviderModelEntity(model)]))
     : undefined;
   return pickDefined([
+    // v2-only: the built-in provider this entry inherits models/defaults from.
+    ['canonical', trimmedString(source.canonical)],
     ['name', trimmedString(source.name)],
     ['package', toProviderPackage(source.package ?? source.npm)],
     ['env', Array.isArray(source.env) ? source.env.filter((entry) => typeof entry === 'string' && entry.trim()).map((entry) => entry.trim()) : undefined],
@@ -687,6 +735,7 @@ export {
   toMcpEntity,
   readMcpEntry,
   readMcpEntries,
+  readLayeredMcpEntries,
   writeMcpEntry,
   deleteMcpEntry,
   toProviderPackage,

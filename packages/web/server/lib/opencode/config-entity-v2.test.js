@@ -13,7 +13,7 @@ delete process.env.OPENCODE_CONFIG;
 const { parseMdFile } = await import('./shared.js');
 const { getAgentConfig, getAgentPermissions, updateAgent, createAgent } = await import('./agents.js');
 const { getCommandConfig, updateCommand } = await import('./commands.js');
-const { getMcpConfig, updateMcpConfig } = await import('./mcp.js');
+const { getMcpConfig, listMcpConfigs, updateMcpConfig } = await import('./mcp.js');
 
 let projectDir;
 
@@ -214,6 +214,51 @@ describe('entity modules speak OpenCode 2 shapes', () => {
       model: 'anthropic/claude-sonnet-4-5#high',
       subagent: true,
     });
+  });
+
+  it('rewrites a v1 theme color as the hex OpenCode migrates it to', () => {
+    const agentPath = write('.opencode/agent/tinted.md', [
+      '---',
+      'description: Tinted',
+      'color: primary',
+      '---',
+      '',
+      'Prompt.',
+    ].join('\n'));
+
+    updateAgent('tinted', { description: 'Still tinted' }, projectDir);
+
+    // `primary` is not a v2 color; the native decoder would skip the whole file.
+    expect(parseMdFile(agentPath).frontmatter).toEqual({ description: 'Still tinted', color: '#aaaaaa' });
+  });
+
+  it('answers the project v1 override when the user file already holds the v2 spelling', () => {
+    const userConfigPath = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.json');
+    fs.mkdirSync(path.dirname(userConfigPath), { recursive: true });
+    fs.writeFileSync(userConfigPath, JSON.stringify({
+      mcp: { servers: { docs: { type: 'remote', url: 'https://global.example.com/mcp' } } },
+    }, null, 2), 'utf8');
+    const projectConfigPath = write('.opencode/opencode.json', JSON.stringify({
+      mcp: { docs: { type: 'remote', url: 'https://project.example.com/mcp', timeout: 5000 } },
+    }, null, 2));
+
+    try {
+      expect(getMcpConfig('docs', projectDir)).toEqual(expect.objectContaining({
+        url: 'https://project.example.com/mcp',
+        scope: 'project',
+        legacy: true,
+      }));
+      expect(listMcpConfigs(projectDir).find((entry) => entry.name === 'docs').url).toBe('https://project.example.com/mcp');
+
+      updateMcpConfig('docs', { timeout: { catalog: 9000, execution: 9000 } }, projectDir);
+
+      expect(readJson(projectConfigPath).mcp).toEqual({
+        servers: { docs: { type: 'remote', url: 'https://project.example.com/mcp', timeout: { catalog: 9000, execution: 9000 } } },
+      });
+      expect(readJson(userConfigPath).mcp.servers.docs.url).toBe('https://global.example.com/mcp');
+    } finally {
+      fs.rmSync(userConfigPath, { force: true });
+    }
   });
 
   it('reads a v1 mcp entry and rewrites it under mcp.servers in the same file', () => {
