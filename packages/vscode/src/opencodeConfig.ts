@@ -1584,7 +1584,9 @@ export const getAgentPermissions = (agentName: string, workingDirectory?: string
 
 const parseMdFile = (filePath: string): { frontmatter: Record<string, unknown>; body: string } => {
   const content = fs.readFileSync(filePath, 'utf8');
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+  // The closing fence may end the file: an agent with no system prompt has
+  // nothing after it.
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?$/);
   if (!match) return { frontmatter: {}, body: content.trim() };
   let frontmatter: Record<string, unknown> = {};
   try {
@@ -1602,7 +1604,7 @@ const writeMdFile = (filePath: string, frontmatter: Record<string, unknown>, bod
     Object.entries(frontmatter ?? {}).filter(([, value]) => value != null)
   );
   const yamlStr = yaml.stringify(cleanedFrontmatter);
-  const content = `---\n${yamlStr}---\n\n${body ?? ''}`.trimEnd();
+  const content = `${`---\n${yamlStr}---\n\n${body ?? ''}`.trimEnd()}\n`;
   fs.writeFileSync(filePath, content, 'utf8');
 };
 

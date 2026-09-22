@@ -10,6 +10,14 @@ mock.module('vscode', () => ({
   },
 }));
 
+// Point the user-level OpenCode config at a scratch directory BEFORE importing:
+// the bridge writes agents, commands and plugins there, and a built-in agent
+// such as `build` is materialised as a user-level file. Nothing here may touch
+// the real ~/.config/opencode.
+const scratchConfigRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-bridge-config-'));
+process.env.XDG_CONFIG_HOME = path.join(scratchConfigRoot, 'xdg');
+process.env.OPENCODE_CONFIG_DIR = '';
+
 const { handleConfigBridgeMessage } = await import('./bridge-config-runtime.ts');
 
 const tempRoots = [];
