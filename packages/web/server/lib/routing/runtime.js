@@ -13,10 +13,9 @@
  */
 import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
-import { isRoutingFeatureAvailable } from './feature-flag.js';
 import { AUTO_MODEL_REF, BUILTIN_CATEGORIES, isAutoModel } from './defaults.js';
 import { createRoutingStore, parseEffectiveConfig } from './store.js';
-import { buildPermissionRequest, buildRoutingRequest, createJevClient, decidePermission, decideRouting } from './jev.js';
+import { buildPermissionRequest, buildRoutingRequest, createJevClient, decidePermission, decideRouting, jevEndpoint } from './jev.js';
 import { loadRoutingHistory } from './history.js';
 
 const HISTORY_TIMEOUT_MS = 2500;
@@ -82,18 +81,22 @@ export function createRoutingRuntime({
 
   /** What the client needs to decide whether to offer Auto and what the settings page shows. */
   const describe = async () => {
-    const available = isRoutingFeatureAvailable();
-    if (!available) return { available: false, autoReady: false, tokenPresent: false, config: null, builtins: [] };
     const [config, token] = await Promise.all([store.readConfig(), store.readToken()]);
     const tokenPresent = Boolean(token);
-    const autoReady = config.enabled && tokenPresent && Boolean(config.fallback) && enabledCategories(config).length >= 2;
+    // A key is not a precondition: without one Jev answers through the free
+    // model zen serves, so Auto only needs a fallback and two categories.
+    const autoReady = config.enabled && Boolean(config.fallback) && enabledCategories(config).length >= 2;
     // Built-in text travels with the config so "Reset" in Settings restores the shipped wording.
-    return { available, autoReady, tokenPresent, config, builtins: BUILTIN_CATEGORIES };
+    // `available` stays in the payload for the client: a runtime without an
+    // OpenChamber server (VS Code) answers 404 and reads it as false.
+    return { available: true, autoReady, tokenPresent, jevSource: jevEndpoint(token).source, config, builtins: BUILTIN_CATEGORIES };
   };
 
   const publishUpdated = async () => {
     const state = await describe();
-    broadcast('openchamber:routing.updated', { available: state.available, autoReady: state.autoReady, tokenPresent: state.tokenPresent });
+    broadcast('openchamber:routing.updated', {
+      available: state.available, autoReady: state.autoReady, tokenPresent: state.tokenPresent, jevSource: state.jevSource,
+    });
     return state;
   };
 
@@ -237,7 +240,7 @@ export function createRoutingRuntime({
     const cached = permissionDecisions.get(permission.id);
     if (cached && now() - cached.at < PERMISSION_DECISION_TTL_MS) return cached.result;
     const state = await describe();
-    if (!state.available || !state.config?.enabled || !state.config.safetyNet.enabled || !state.tokenPresent) return { action: 'accept' };
+    if (!state.config?.enabled || !state.config.safetyNet.enabled) return { action: 'accept' };
     let result;
     try {
       const token = await store.readToken();

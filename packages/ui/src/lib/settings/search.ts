@@ -590,7 +590,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'routing',
     titleKey: 'settings.routing.token.label',
     descriptionKey: 'settings.routing.token.info',
-    keywords: ['jev', 'typesafe', 'api key', 'token', 'routing'],
+    keywords: ['jev', 'typesafe', 'api key', 'token', 'routing', 'zen', 'free'],
     isAvailable: (ctx) => !ctx.isVSCode && ctx.routingAvailable,
   },
   {

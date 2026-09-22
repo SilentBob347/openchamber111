@@ -14,11 +14,10 @@
  *   request text and switches the session onto the chosen model and agent
  *   before the prompt is forwarded.
  *
- * Both parse the JSON body only while Auto can actually be selected, so a
- * build without the flag pays nothing on the send path.
+ * Both parse the JSON body only for JSON requests, so a streamed or non-JSON
+ * upload reaches the proxy untouched.
  */
 import express from 'express';
-import { isRoutingFeatureAvailable } from './feature-flag.js';
 import { isAutoModel } from './defaults.js';
 
 const CREATE_PATH = '/api/session';
@@ -34,12 +33,9 @@ const sendError = (res, error) => {
 };
 
 export function registerRoutingRoutes(app, runtime) {
-  const unavailable = (res) => res.status(404).json({ error: 'Routing is not available in this build' });
-
   app.get('/api/routing', async (_req, res) => {
     try {
       const state = await runtime.describe();
-      if (!state.available) return unavailable(res);
       res.json({ ...state, heldPermissions: runtime.heldPermissions() });
     } catch (error) {
       sendError(res, error);
@@ -47,7 +43,6 @@ export function registerRoutingRoutes(app, runtime) {
   });
 
   app.put('/api/routing', express.json({ limit: '256kb' }), async (req, res) => {
-    if (!isRoutingFeatureAvailable()) return unavailable(res);
     try {
       res.json(await runtime.updateConfig(req.body?.config));
     } catch (error) {
@@ -56,7 +51,6 @@ export function registerRoutingRoutes(app, runtime) {
   });
 
   app.put('/api/routing/token', express.json({ limit: '16kb' }), async (req, res) => {
-    if (!isRoutingFeatureAvailable()) return unavailable(res);
     try {
       res.json(await runtime.setToken(req.body?.token));
     } catch (error) {
@@ -65,7 +59,6 @@ export function registerRoutingRoutes(app, runtime) {
   });
 
   app.delete('/api/routing/token', async (_req, res) => {
-    if (!isRoutingFeatureAvailable()) return unavailable(res);
     try {
       res.json(await runtime.clearToken());
     } catch (error) {
@@ -77,9 +70,8 @@ export function registerRoutingRoutes(app, runtime) {
 export function registerRoutingPromptRewrite(app, runtime) {
   const parseJson = express.json({ limit: '50mb' });
 
-  /** Parses the body only for JSON requests; by default only while the flag is on. */
-  const withParsedBody = (handler, { always = false } = {}) => (req, res, next) => {
-    if (!always && !isRoutingFeatureAvailable()) return next();
+  /** Parses the body only for JSON requests; anything else stays a stream. */
+  const withParsedBody = (handler) => (req, res, next) => {
     const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
     if (!contentType.includes('application/json')) return next();
     parseJson(req, res, (parseError) => {
@@ -93,8 +85,6 @@ export function registerRoutingPromptRewrite(app, runtime) {
     return url.searchParams.get('directory') || req.get('x-opencode-directory') || undefined;
   };
 
-  const refuseAuto = (res) => res.status(400).json({ error: 'Auto routing is not available on this server. Choose a model.' });
-
   // Session creation is the other v2 request that carries a model: flows that
   // know their first turn's selection create the session on it (btw forks,
   // auto review, fusion, extension starts). OpenCode accepts the sentinel at
@@ -102,31 +92,30 @@ export function registerRoutingPromptRewrite(app, runtime) {
   // model is dropped here and the session starts on OpenCode's default. No
   // session id exists yet to mark; the first send resends the sentinel through
   // the model switch below because the session's record never matches Auto.
-  app.post(CREATE_PATH, withParsedBody((req, res, next) => {
+  app.post(CREATE_PATH, withParsedBody((req, _res, next) => {
     if (!isAutoModel(req.body?.model)) return next();
-    if (!isRoutingFeatureAvailable()) return refuseAuto(res);
     delete req.body.model;
     next();
-  }, { always: true }));
+  }));
 
-  // The sentinel is inspected even without the flag: a client that still holds
-  // an `openchamber/auto` selection from another build must get a readable
-  // refusal here, never OpenCode's "provider.no-route" after the switch lands.
   app.post(MODEL_PATH, withParsedBody((req, res, next) => {
-    if (!isRoutingFeatureAvailable()) {
-      if (isAutoModel(req.body?.model)) return refuseAuto(res);
-      return next();
-    }
     const directory = directoryOf(req);
     // Swallowed, not forwarded: OpenCode has no `openchamber` provider, and the
     // real model is only known once the request text arrives.
     if (runtime.noteModelSelection(req.params.sessionId, req.body?.model, directory)) return res.status(204).end();
     next();
-  }, { always: true }));
+  }));
 
-  app.post(SEND_PATHS, withParsedBody((req, res, next) => {
+  // Whether the session is routed is known from the URL alone, so an ordinary
+  // send is never read: it reaches the proxy as the stream it arrived as, the
+  // way it did before routing existed.
+  const routedSendsOnly = (handler) => {
+    const parsed = withParsedBody(handler);
+    return (req, res, next) => (runtime.isAutoSession(req.params.sessionId) ? parsed(req, res, next) : next());
+  };
+
+  app.post(SEND_PATHS, routedSendsOnly((req, res, next) => {
     const sessionId = req.params.sessionId;
-    if (!runtime.isAutoSession(sessionId)) return next();
     const directory = directoryOf(req);
     runtime.routeSend({ sessionId, directory, body: req.body })
       .then(() => next())

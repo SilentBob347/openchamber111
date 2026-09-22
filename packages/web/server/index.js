@@ -944,9 +944,8 @@ const globalMessageStreamHub = createGlobalMessageStreamHub({
   deltaCoalesceWindowMs: resolveDeltaCoalesceWindowMs(),
 });
 
-// Jev model routing and the permission safety net. Dark unless
-// OPENCHAMBER_ROUTING_ENABLE is set; every failure keeps the user's own model
-// or the auto-accept reply it was asked about.
+// Jev model routing and the permission safety net. Every failure keeps the
+// user's own model or the auto-accept reply it was asked about.
 const routingRuntime = createRoutingRuntime({
   dataDir: OPENCHAMBER_DATA_DIR,
   buildOpenCodeUrl,

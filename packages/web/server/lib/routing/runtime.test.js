@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRoutingRuntime, requestTextOf } from './runtime.js';
 import { resolveEffectiveConfig } from './store.js';
 import { excerptHead, excerptHeadTail, turnsToHistory } from './history.js';
-import { decidePermission, decideRouting } from './jev.js';
+import { createJevClient, decidePermission, decideRouting } from './jev.js';
 
 const AUTO = { providerID: 'openchamber', id: 'auto' };
 const FALLBACK = { model: { providerID: 'anthropic', modelID: 'claude-sonnet-5' }, variant: 'medium' };
@@ -18,8 +18,7 @@ const readyConfig = () => {
   return config;
 };
 
-const makeRuntime = ({ config = readyConfig(), token = 'key', answers, askError, flag = '1' } = {}) => {
-  process.env.OPENCHAMBER_ROUTING_ENABLE = flag;
+const makeRuntime = ({ config = readyConfig(), token = 'key', answers, askError } = {}) => {
   const events = [];
   const store = {
     readConfig: vi.fn(async () => config),
@@ -131,6 +130,32 @@ describe('resolveAutoSelection', () => {
   });
 });
 
+describe('jev endpoint', () => {
+  const capture = async (token) => {
+    let call = null;
+    const fetchImpl = async (url, init) => {
+      call = { url, init };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ answers: {} }) };
+    };
+    await createJevClient({ fetchImpl }).ask({ state: 'x', questions: {} }, token);
+    return { url: call.url, headers: call.init.headers, body: JSON.parse(call.init.body) };
+  };
+
+  it('sends a saved key to TypeSafe and falls back to the free model zen serves without one', async () => {
+    const keyed = await capture('secret');
+    expect(keyed.url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect(keyed.headers.authorization).toBe('Bearer secret');
+    expect(keyed.body.model).toBe('jev-latest');
+
+    const free = await capture(null);
+    expect(free.url).toBe('https://opencode.ai/zen/v1/systemone');
+    expect(free.headers.authorization).toBeUndefined();
+    // Zen counts our calls by this header, and does not know the `jev-latest` alias.
+    expect(free.headers['x-opencode-client']).toBe('openchamber');
+    expect(free.body.model).toBe('jev-1.13-free');
+  });
+});
+
 describe('auto sessions', () => {
   it('remembers the sentinel selection and forgets it when a real model is chosen', () => {
     const { runtime } = makeRuntime({ answers: {} });
@@ -162,24 +187,22 @@ describe('evaluatePermission', () => {
     expect(events.at(-1)).toMatchObject({ type: 'openchamber:routing.safety-skipped', properties: { permissionId: 'p1', error: 'Jev timed out after 4000ms' } });
   });
 
-  it('accepts without asking when the safety net is off, the key is missing, or the flag is unset', async () => {
+  it('accepts without asking when the safety net is off', async () => {
     const off = readyConfig();
     off.safetyNet.enabled = false;
-    for (const setup of [{ config: off }, { token: null }, { flag: '' }]) {
-      const { runtime, jev } = makeRuntime({ ...setup, answers: {} });
-      expect(await runtime.evaluatePermission(permission, '/repo')).toEqual({ action: 'accept' });
-      expect(jev.ask).not.toHaveBeenCalled();
-    }
+    const { runtime, jev } = makeRuntime({ config: off, answers: {} });
+    expect(await runtime.evaluatePermission(permission, '/repo')).toEqual({ action: 'accept' });
+    expect(jev.ask).not.toHaveBeenCalled();
   });
 });
 
 describe('describe', () => {
-  it('reports Auto ready only with the flag, enabled config, key, fallback and two categories', async () => {
-    expect((await makeRuntime({ answers: {} }).runtime.describe()).autoReady).toBe(true);
-    expect((await makeRuntime({ token: null, answers: {} }).runtime.describe())).toMatchObject({ autoReady: false, tokenPresent: false });
+  it('reports Auto ready with an enabled config, a fallback and two categories, key or no key', async () => {
+    expect((await makeRuntime({ answers: {} }).runtime.describe())).toMatchObject({ autoReady: true, tokenPresent: true, jevSource: 'typesafe' });
+    // Without a key the free Jev model on zen answers, so Auto stays available.
+    expect((await makeRuntime({ token: null, answers: {} }).runtime.describe())).toMatchObject({ autoReady: true, tokenPresent: false, jevSource: 'zen-free' });
     const one = readyConfig();
     one.categories = one.categories.map((c, i) => ({ ...c, enabled: i === 0 }));
     expect((await makeRuntime({ config: one, answers: {} }).runtime.describe()).autoReady).toBe(false);
-    expect(await makeRuntime({ flag: '', answers: {} }).runtime.describe()).toEqual({ available: false, autoReady: false, tokenPresent: false, config: null, builtins: [] });
   });
 });

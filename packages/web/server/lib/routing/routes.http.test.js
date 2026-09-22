@@ -1,6 +1,6 @@
 import express from 'express';
 import request from 'supertest';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { registerRoutingPromptRewrite, registerRoutingRoutes } from './routes.js';
 
@@ -9,8 +9,7 @@ import { registerRoutingPromptRewrite, registerRoutingRoutes } from './routes.js
  * `req.body` when a middleware parsed it. These tests mount the rewrite ahead
  * of a stand-in proxy that records what it would forward.
  */
-const createApp = ({ flag = '1', routeSend, autoSessions = new Set() } = {}) => {
-  process.env.OPENCHAMBER_ROUTING_ENABLE = flag;
+const createApp = ({ routeSend, autoSessions = new Set() } = {}) => {
   const forwarded = [];
   const runtime = {
     noteModelSelection: vi.fn((sessionId, model) => {
@@ -24,7 +23,7 @@ const createApp = ({ flag = '1', routeSend, autoSessions = new Set() } = {}) => 
       if (typeof body?.command === 'string') body.model = { providerID: 'openai', id: 'gpt-6-astra' };
       return {};
     }),
-    describe: async () => ({ available: true, autoReady: true, tokenPresent: true, config: null, builtins: [] }),
+    describe: async () => ({ available: true, autoReady: true, tokenPresent: true, jevSource: 'typesafe', config: null, builtins: [] }),
     heldPermissions: () => [],
     updateConfig: vi.fn(async () => ({ available: true })),
     setToken: vi.fn(async () => ({ available: true, tokenPresent: true })),
@@ -49,10 +48,6 @@ const createApp = ({ flag = '1', routeSend, autoSessions = new Set() } = {}) => 
   });
   return { app, runtime, forwarded };
 };
-
-afterEach(() => {
-  delete process.env.OPENCHAMBER_ROUTING_ENABLE;
-});
 
 describe('routing send rewrite', () => {
   it('swallows the Auto sentinel on a model switch instead of forwarding it', async () => {
@@ -98,39 +93,19 @@ describe('routing send rewrite', () => {
     expect(runtime.routeSend).toHaveBeenCalledWith({ sessionId: 's1', directory: '/repo', body: { text: 'hi' } });
   });
 
-  it('leaves a send in a session that is not on Auto alone', async () => {
+  it('leaves a send in a session that is not on Auto unread', async () => {
     const { app, runtime, forwarded } = createApp();
     await request(app).post('/api/session/s1/prompt').send({ text: 'hi' }).expect(204);
     expect(runtime.routeSend).not.toHaveBeenCalled();
-    expect(forwarded[0].parsed).toBe(true);
+    expect(forwarded[0].parsed).toBe(false);
   });
 
-  it('leaves the stream untouched when the flag is off or the body is not JSON', async () => {
-    const off = createApp({ flag: '', autoSessions: new Set(['s1']) });
-    await request(off.app).post('/api/session/s1/prompt').send({ text: 'hi' }).expect(204);
-    expect(off.forwarded[0].parsed).toBe(false);
-    expect(off.runtime.routeSend).not.toHaveBeenCalled();
-
+  it('leaves the stream untouched when the body is not JSON', async () => {
     const text = createApp({ autoSessions: new Set(['s1']) });
     await request(text.app).post('/api/session/s1/command').set('content-type', 'text/plain').send('raw').expect(204);
     expect(text.forwarded[0]).toEqual({ path: '/session/s1/command', parsed: false, raw: 'raw' });
   });
 
-  it('refuses the Auto sentinel with a readable error when the flag is off', async () => {
-    const { app, forwarded, runtime } = createApp({ flag: '' });
-    const response = await request(app).post('/api/session/s1/model').send({ model: { providerID: 'openchamber', id: 'auto' } });
-    expect(response.status).toBe(400);
-    expect(response.body.error).toMatch(/not available/);
-    expect(forwarded).toEqual([]);
-    expect(runtime.noteModelSelection).not.toHaveBeenCalled();
-
-    const create = await request(app).post('/api/session').send({ model: { providerID: 'openchamber', id: 'auto' } });
-    expect(create.status).toBe(400);
-    expect(forwarded).toEqual([]);
-
-    await request(app).post('/api/session/s1/model').send({ model: { providerID: 'anthropic', id: 'claude-opus-5' } }).expect(204);
-    expect(forwarded).toEqual([{ path: '/session/s1/model', parsed: true, body: { model: { providerID: 'anthropic', id: 'claude-opus-5' } } }]);
-  });
 
   it('answers with the runtime error instead of forwarding an unroutable send', async () => {
     const { app, forwarded } = createApp({
@@ -157,8 +132,4 @@ describe('routing routes', () => {
     expect(runtime.clearToken).toHaveBeenCalled();
   });
 
-  it('is absent without the feature flag', async () => {
-    const { app } = createApp({ flag: '' });
-    await request(app).put('/api/routing/token').send({ token: 'x' }).expect(404);
-  });
 });
