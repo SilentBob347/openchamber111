@@ -44,6 +44,32 @@ function attachedText(message) {
   return null;
 }
 
+// Records OpenCode appends around a turn that carry no conversation content:
+// the `idle` marker that closes every turn and the agent/model/location
+// switches. They are invisible to turn boundaries and to "what is the newest
+// message". An `idle` whose outcome is not `succeeded` is not transparent: it
+// is the evidence that the turn failed or was interrupted.
+const TRANSPARENT_TYPES = new Set(['agent-switched', 'model-switched', 'location-switched']);
+
+function isTransparent(record) {
+  if (record?.type === 'idle') return record.outcome === 'succeeded';
+  return TRANSPARENT_TYPES.has(record?.type);
+}
+
+/**
+ * The id of the newest record that is conversation content, given a page in
+ * v2's newest-first order; null when the page holds only service records.
+ * Both the assist reader and the pre-write re-check use it so they agree on
+ * what "the last message" is.
+ */
+export function newestContentId(records) {
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record?.id || isTransparent(record)) continue;
+    return record.id;
+  }
+  return null;
+}
+
 /**
  * v2 message records are flat: an assistant message carries `content[]`, a user
  * message a single `text` plus its attachments, and context items that used to
@@ -84,6 +110,7 @@ function readMessage(message) {
   return {
     id: message.id,
     role,
+    transparent: isTransparent(message),
     // v2 has no `parentID` on a message: a turn is the run of messages between
     // one user message and the assistant reply that follows it, which is what
     // `collectTurns` walks.
@@ -112,6 +139,7 @@ function collectTurns(messages) {
   let active = null;
   let attached = [];
   for (const message of messages) {
+    if (message.transparent) continue;
     if (message.role === 'synthetic') {
       if (message.text) attached.push(message);
       continue;
@@ -153,13 +181,19 @@ export async function loadAssistContext({ readPage, signal }) {
     }
     older.reverse();
     messages = older.concat(messages);
-    const last = messages.at(-1);
-    if (!last?.complete || !last.text) return null;
-    const turns = collectTurns(messages);
     const next = typeof page.cursor?.next === 'string' ? page.cursor.next : null;
-    if (turns.length === TURN_LIMIT || !next || pageNumber === MAX_PAGES - 1) {
-      if (!turns.at(-1)?.complete || turns.at(-1).assistant.id !== last.id) return null;
-      return { turns, last };
+    // A successful turn ends with an `idle` marker after the answer; look past
+    // it and its siblings to the newest content record.
+    const last = messages.findLast((message) => !message.transparent);
+    if (!last) {
+      if (!next || pageNumber === MAX_PAGES - 1) return null;
+    } else {
+      if (!last.complete || !last.text) return null;
+      const turns = collectTurns(messages);
+      if (turns.length === TURN_LIMIT || !next || pageNumber === MAX_PAGES - 1) {
+        if (!turns.at(-1)?.complete || turns.at(-1).assistant.id !== last.id) return null;
+        return { turns, last };
+      }
     }
     if (cursors.has(next)) throw new Error('Session message pagination made no progress');
     cursors.add(next);

@@ -486,12 +486,14 @@ export const createScheduledTasksRuntime = (deps) => {
 
     // A v2 prompt carries a single authored text. Standing project context and
     // the goal briefing therefore travel as synthetic messages sent first, so
-    // the model still reads the prompt against them exactly as before.
+    // the model still reads the prompt against them exactly as before. A
+    // synthetic message schedules execution unless `resume: false`: without
+    // it the model would start on the briefing alone, before the task arrived.
     if (knowledge.text) {
-      await client.session.synthetic({ sessionID, text: knowledge.text });
+      await client.session.synthetic({ sessionID, text: knowledge.text, resume: false });
     }
     if (task.execution.goalEnabled) {
-      await client.session.synthetic({ sessionID, text: buildGoalIntroText(task.execution.goalTokenBudget) });
+      await client.session.synthetic({ sessionID, text: buildGoalIntroText(task.execution.goalTokenBudget), resume: false });
     }
 
     await client.session.prompt({

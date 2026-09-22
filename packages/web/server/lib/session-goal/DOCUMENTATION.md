@@ -82,12 +82,11 @@ before touching the filesystem). Rationale: metadata rides every
 3. On fire (`tick`), gated by the `sessionGoalEnabled` setting:
    - fetch session (skip sub-agent sessions), require an `active` goal;
    - authoritative live-activity check after the quiet window: re-read
-     `/api/session/active`, bail if the parent resumed. BLOCKED ON OPENCODE
-     2.x: `/session/{id}/children` has no v2 replacement, so a parent cannot
-     see its subagents and does not wait for them (the children list is
-     treated as empty, never as "unknown", or the tick would re-arm forever).
-     A status fetch failure is unknown, not empty, so it skips the audit and
-     retries after another quiet window;
+     `/api/session/active`, bail if the parent resumed; then list the
+     parent's subagent sessions through `GET /api/session?parentID=` (cursor
+     paged) and bail while any of them is active. A status or children fetch
+     failure is unknown, not empty, so it skips the audit and retries after
+     another quiet window;
    - messages come from `/api/session/:id/message` as v2's flat records
      (`type`, `content[]`, `model`, `finish`, `tokens`); `toLoopMessage`
      projects them into the `{ info, parts }` view the rest of the tick reads,

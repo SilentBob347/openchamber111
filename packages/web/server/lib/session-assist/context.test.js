@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { excerpt, loadAssistContext } from './context.js';
+import { excerpt, loadAssistContext, newestContentId } from './context.js';
 import { buildAssistPrompt } from './prompt.js';
 
 // v2 message records are flat and a page lists them newest first.
@@ -14,6 +14,10 @@ const assistant = (id, text, extra = {}) => ({
   ...extra,
 });
 const synthetic = (id, text, extra = {}) => ({ id, type: 'synthetic', text, ...extra });
+// OpenCode closes every turn with an idle marker; a switch is appended when
+// the user changes model or agent between turns.
+const idle = (id, outcome = 'succeeded') => ({ id, type: 'idle', outcome, time: { created: 2 } });
+const modelSwitch = (id) => ({ id, type: 'model-switched', model: { providerID: 'p', id: 'm' } });
 
 const pair = (id) => [user(`u${id}`, `request ${id}`), assistant(`a${id}`, `answer ${id}`)];
 
@@ -118,6 +122,48 @@ describe('session assist context', () => {
     const context = await load(async () => page([assistant(`a${++calls}`, 'answer')], `cursor${calls}`));
     expect(calls).toBe(8);
     expect(context).toBeNull();
+  });
+
+  it('looks past the idle marker that closes a finished turn', async () => {
+    // The ordinary v2 transcript: answer, then `idle`, possibly followed by a
+    // switch the user made afterwards. The answer is still the last message.
+    for (const tail of [[idle('i')], [idle('i'), modelSwitch('m')], [modelSwitch('m'), idle('i')]]) {
+      const context = await load(async () => page([...pair(1), ...tail]));
+      expect(context?.last.id).toBe('a1');
+      expect(context.turns).toHaveLength(1);
+      expect(context.turns[0].assistant.id).toBe('a1');
+    }
+  });
+
+  it('keeps an attachment glued to its prompt across a switch, and a turn across an idle', async () => {
+    const attachment = synthetic('s', 'Attached note');
+    const context = await load(async () => page([
+      ...pair(1), idle('i1'),
+      attachment, modelSwitch('m'), user('u2', 'Use the note'), assistant('a2', 'Used'), idle('i2'),
+    ]));
+    expect(context.turns.map((turn) => turn.user.id)).toEqual(['u1', 'u2']);
+    expect(context.turns[1].user.text).toBe('Attached note\n\nUse the note');
+    expect(context.turns[0].complete).toBe(true);
+  });
+
+  it('treats a failed or interrupted idle as evidence the turn did not finish', async () => {
+    for (const outcome of ['failed', 'interrupted']) {
+      expect(await load(async () => page([...pair(1), idle('i', outcome)]))).toBeNull();
+    }
+  });
+
+  it('keeps paging when a page holds only service records', async () => {
+    const context = await load(async ({ cursor }) => (cursor
+      ? page([...pair(1)])
+      : page([idle('i1'), modelSwitch('m'), idle('i2')], 'older')));
+    expect(context?.last.id).toBe('a1');
+  });
+
+  it('names the newest content record of a newest-first page', () => {
+    expect(newestContentId([idle('i'), modelSwitch('m'), assistant('a', 'x'), user('u', 'y')])).toBe('a');
+    expect(newestContentId([idle('i', 'failed'), assistant('a', 'x')])).toBe('i');
+    expect(newestContentId([idle('i')])).toBeNull();
+    expect(newestContentId(undefined)).toBeNull();
   });
 
   it('skips unfinished, failed, compaction, and user tails', async () => {

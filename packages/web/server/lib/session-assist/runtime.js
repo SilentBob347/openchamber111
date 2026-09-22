@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import { OpenCode } from '@opencode/client';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
-import { loadAssistContext } from './context.js';
+import { loadAssistContext, newestContentId } from './context.js';
 import { buildAssistPrompt, buildAssistSystemPrompt } from './prompt.js';
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
@@ -28,6 +28,8 @@ const RECAP_CHAR_LIMIT = 320;
 const SUGGESTION_CHAR_LIMIT = 500;
 const FETCH_TIMEOUT_MS = 5_000;
 const GENERATION_TIMEOUT_MS = 120_000;
+// Enough records to look past the idle marker and a couple of switches.
+const TAIL_RECHECK_LIMIT = 8;
 const QUIET_FAILURE_CODES = new Set(['context-too-small', 'output-exhausted']);
 
 const extractJsonObject = (value) => {
@@ -182,10 +184,12 @@ export const createSessionAssistRuntime = ({
     if (recap && scriptMismatch(recap)) recap = '';
     if (suggestion && scriptMismatch(suggestion)) suggestion = '';
     if (!recap && !suggestion) return;
-    // v2 lists newest first, so the tail is the first record.
-    const latestPage = await client.message.list({ sessionID: sessionId, limit: 1, order: 'desc' }, requestOptions());
+    // v2 lists newest first. The answer is followed by its `idle` marker and
+    // possibly a model or agent switch, so read a short tail and compare the
+    // newest content record rather than the newest record.
+    const latestPage = await client.message.list({ sessionID: sessionId, limit: TAIL_RECHECK_LIMIT, order: 'desc' }, requestOptions());
     checkCurrent();
-    if (latestPage?.data?.[0]?.id !== last.id) return;
+    if (newestContentId(latestPage?.data) !== last.id) return;
     // Never fall back to the pre-generation metadata snapshot after a failed
     // fresh read: doing so overwrites dismissals and unrelated metadata.
     const freshSession = await client.session.get({ sessionID: sessionId }, requestOptions());
