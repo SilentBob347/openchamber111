@@ -172,12 +172,92 @@ describe('useAutosave', () => {
     await act(async () => { harness.autosave.requestSave(); });
     await flush();
 
-    // The stale first save lands last and must not overwrite the newer result.
-    await act(async () => { pending[1](AUTOSAVE_SAVED); });
-    await flush();
+    // The superseded first save fails; only the follow-up's outcome is reported.
     await act(async () => { pending[0](autosaveFailed('stale')); });
+    await flush();
+    await act(async () => { pending[1](AUTOSAVE_SAVED); });
     await flush();
 
     expect(toastErrors).toEqual([]);
+  });
+
+  test('a newer change is never overwritten by an older save landing later', async () => {
+    // A page-shaped save routine: reads the draft at save time, compares it to
+    // the last written value, writes, then moves the baseline.
+    let draft = '';
+    let baseline = '';
+    let persisted = '';
+    const writes: Array<{ value: string; resolve: () => void }> = [];
+    const save = async (): Promise<AutosaveResult> => {
+      const value = draft;
+      if (value === baseline) return AUTOSAVE_UNCHANGED;
+      await new Promise<void>((resolve) => writes.push({ value, resolve }));
+      persisted = value;
+      baseline = value;
+      return AUTOSAVE_SAVED;
+    };
+    const harness = await render(save);
+
+    draft = 'older';
+    await act(async () => { harness.autosave.requestSave(); });
+    await flush();
+    draft = 'newer';
+    await act(async () => { harness.autosave.requestSave(); });
+    await flush();
+
+    // The second write cannot start (and so cannot be overtaken) while the
+    // first is in flight.
+    expect(writes.map((write) => write.value)).toEqual(['older']);
+
+    await act(async () => { writes[0].resolve(); });
+    await flush();
+    expect(writes.map((write) => write.value)).toEqual(['older', 'newer']);
+
+    await act(async () => { writes[1].resolve(); });
+    await flush();
+    expect(persisted).toBe('newer');
+    expect(baseline).toBe('newer');
+    expect(toastErrors).toEqual([]);
+  });
+
+  test('requests made during a save collapse into one follow-up save', async () => {
+    const pending: Array<(result: AutosaveResult) => void> = [];
+    const harness = await render(() => new Promise<AutosaveResult>((resolve) => pending.push(resolve)));
+
+    await act(async () => { harness.autosave.requestSave(); });
+    await flush();
+    await act(async () => { harness.autosave.requestSave(); });
+    await act(async () => { harness.autosave.requestSave(); });
+    await act(async () => { harness.autosave.requestSave(); });
+    await flush();
+    expect(pending).toHaveLength(1);
+
+    await act(async () => { pending[0](AUTOSAVE_SAVED); });
+    await flush();
+    expect(pending).toHaveLength(2);
+
+    await act(async () => { pending[1](autosaveFailed('second write refused')); });
+    await flush();
+    expect(pending).toHaveLength(2);
+    expect(toastErrors).toHaveLength(1);
+    expect(toastErrors[0]).toContain('second write refused');
+  });
+
+  test('a follow-up save does not start after the page unmounts', async () => {
+    const pending: Array<(result: AutosaveResult) => void> = [];
+    const harness = await render(() => new Promise<AutosaveResult>((resolve) => pending.push(resolve)));
+
+    await act(async () => { harness.autosave.requestSave(); });
+    await flush();
+    await act(async () => { harness.autosave.requestSave(); });
+    await flush();
+
+    await act(async () => root.unmount());
+    await act(async () => { pending[0](autosaveFailed('stale')); });
+    await flush();
+
+    expect(pending).toHaveLength(1);
+    expect(toastErrors).toEqual([]);
+    // afterEach unmounts again; a second unmount on the same root is a no-op.
   });
 });

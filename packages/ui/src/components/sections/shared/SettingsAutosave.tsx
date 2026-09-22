@@ -29,7 +29,9 @@ export const autosaveFailed = (reason: string): AutosaveResult => ({ ok: false, 
 export interface Autosave {
   /**
    * Save after the current render commits, so the routine reads the state the
-   * control just set. Repeated calls in one tick collapse into one save.
+   * control just set. Repeated calls in one tick collapse into one save, and
+   * requests made while a save is in flight collapse into one follow-up save
+   * that runs after it and reads the latest form state.
    */
   requestSave: () => void;
   /**
@@ -52,9 +54,17 @@ export const useAutosave = (save: () => Promise<AutosaveResult>): Autosave => {
   // save time rather than captured when the request was queued.
   const saveRef = React.useRef(save);
   saveRef.current = save;
-  // A save that is still in flight when the next one is queued must not be the
-  // one that decides the reported outcome.
-  const generationRef = React.useRef(0);
+  const tRef = React.useRef(t);
+  tRef.current = t;
+  // Writes are serialized: a page's save routine compares the draft with the
+  // last written value and moves that baseline after the write, so two
+  // routines running at once could let the older write land last and leave
+  // both the persisted value and the baseline on the older draft. While a save
+  // is in flight, new requests only mark a follow-up; it runs once the current
+  // save settles and reads whatever the form holds by then.
+  const inFlightRef = React.useRef(false);
+  const followUpRef = React.useRef(false);
+  const mountedRef = React.useRef(false);
 
   const requestSave = React.useCallback(() => {
     setRequestCount((count) => count + 1);
@@ -65,29 +75,45 @@ export const useAutosave = (save: () => Promise<AutosaveResult>): Autosave => {
     requestSave();
   }, [requestSave]);
 
+  const drain = React.useCallback(async () => {
+    inFlightRef.current = true;
+    try {
+      while (true) {
+        followUpRef.current = false;
+        let result: AutosaveResult;
+        try {
+          result = await saveRef.current();
+        } catch (error) {
+          result = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
+        if (!mountedRef.current) return;
+        // A newer request supersedes this outcome: the follow-up save reports.
+        if (followUpRef.current) continue;
+        if (!result.ok) {
+          toast.error(tRef.current('settings.common.status.saveFailedReason', { reason: result.reason }));
+        }
+        return;
+      }
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   React.useEffect(() => {
     if (requestCount === 0) return;
-    let cancelled = false;
-    const generation = generationRef.current + 1;
-    generationRef.current = generation;
-
-    void (async () => {
-      let result: AutosaveResult;
-      try {
-        result = await saveRef.current();
-      } catch (error) {
-        result = { ok: false, reason: error instanceof Error ? error.message : String(error) };
-      }
-      if (cancelled || generationRef.current !== generation) return;
-      if (!result.ok) {
-        toast.error(t('settings.common.status.saveFailedReason', { reason: result.reason }));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [requestCount]);
+    if (inFlightRef.current) {
+      followUpRef.current = true;
+      return;
+    }
+    void drain();
+  }, [requestCount, drain]);
 
   return { requestSave, onBlurCapture };
 };
