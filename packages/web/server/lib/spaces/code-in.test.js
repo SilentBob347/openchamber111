@@ -854,7 +854,15 @@ describe.skipIf(WIN)('transfer into a local stand-in for a space', () => {
     const control = makeBait(host, { name: 'control' });
     twoPacks(bait);
     twoPacks(control);
-    host.addConfig('[gc]\n\tauto = 1\n\tautoDetach = false\n\tautoPackLimit = 1\n[maintenance]\n\tauto = true');
+    // Everything in the foreground and pinned to the gc task. A detached gc or maintenance would
+    // consolidate the packs after the test looked, and the control and the main assertion alike would
+    // look too early; measured in CI with git 2.55.0, the control saw two packs. Newer git also knows
+    // other maintenance strategies, so the strategy and the task are named rather than left to a default.
+    host.addConfig([
+      '[gc]', '\tauto = 1', '\tautoDetach = false', '\tautoPackLimit = 1',
+      '[maintenance]', '\tauto = true', '\tautoDetach = false', '\tstrategy = gc',
+      '[maintenance "gc"]', '\tenabled = true',
+    ].join('\n'));
     // The control, in the copy: with this config an ordinary commit consolidates the packs.
     control.g(['commit', '--quiet', '--allow-empty', '-m', 'control']);
     expect(packs(control.repo)).toBe(1);
