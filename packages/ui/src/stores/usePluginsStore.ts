@@ -259,7 +259,7 @@ export const usePluginsStore = create<PluginsStore>()(
               body: JSON.stringify(buildEntryBody(input)),
             });
             return response;
-          }, get, { restartId: input.spec });
+          }, get);
           if (result.ok) {
             void get().loadRegistryInfo({ specs: [input.spec], force: true });
           }
@@ -276,7 +276,7 @@ export const usePluginsStore = create<PluginsStore>()(
               body: JSON.stringify(buildEntryBody(input)),
             });
             return response;
-          }, get, { restartId: id });
+          }, get);
           if (result.ok && nextSpec) {
             void get().loadRegistryInfo({ specs: [nextSpec], force: true });
           }
@@ -291,7 +291,7 @@ export const usePluginsStore = create<PluginsStore>()(
               headers: buildDirectoryHeaders(configDirectory),
             });
             return response;
-          }, get, { restartId: id });
+          }, get);
 
           if (result.ok && get().selectedId === id) {
             set({ selectedId: null });
@@ -328,7 +328,7 @@ export const usePluginsStore = create<PluginsStore>()(
               body: JSON.stringify(input),
             });
             return response;
-          }, get, { restartId: input.fileName });
+          }, get);
         },
 
         updateFile: async (id, input) => {
@@ -339,7 +339,7 @@ export const usePluginsStore = create<PluginsStore>()(
               body: JSON.stringify(input),
             });
             return response;
-          }, get, { restartId: id });
+          }, get);
         },
 
         deleteFile: async (id) => {
@@ -349,7 +349,7 @@ export const usePluginsStore = create<PluginsStore>()(
               headers: buildDirectoryHeaders(configDirectory),
             });
             return response;
-          }, get, { restartId: id });
+          }, get);
 
           if (result.ok && get().selectedId === id) {
             set({ selectedId: null });
@@ -436,7 +436,6 @@ async function runPluginMutation(
   progressMessage: string,
   request: (configDirectory: string | null) => Promise<Response>,
   get: () => PluginsStore,
-  options?: { restartId?: string },
 ): Promise<PluginMutationResult> {
   try {
     const configDirectory = getPluginsConfigDirectory();

@@ -533,7 +533,6 @@ export const useSkillsStore = create<SkillsStore>()(
         },
 
         renameSkill: async (name: string, newName: string, requestedDirectory?: string | null) => {
-          let requiresReload = false;
           try {
             const directory = resolveDirectory(requestedDirectory);
             const queryParams = directory ? `?directory=${encodeURIComponent(directory)}` : '';
@@ -556,7 +555,6 @@ export const useSkillsStore = create<SkillsStore>()(
             const needsReload = payload?.requiresReload ?? false;
             invalidateSkillsLoadCache(directory);
             if (needsReload) {
-              requiresReload = true;
               await refreshSkillsAfterOpenCodeRestart({
                 message: payload?.message,
                 delayMs: payload?.reloadDelayMs,

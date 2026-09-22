@@ -390,7 +390,8 @@ export function applyDirectoryEvent(
         }
       }
       if (session?.revert) {
-        const { revert: _revert, ...rest } = session
+        const rest = { ...session }
+        delete rest.revert
         sessions[result.index] = rest
         markSessionEvent(sessionID, false)
         changed = true

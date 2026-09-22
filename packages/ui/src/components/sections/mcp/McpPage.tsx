@@ -9,7 +9,6 @@ import {
   envRecordToArray,
   MCP_PROTOCOLS,
   type McpDraft,
-  type McpOAuthConfig,
   type McpProtocol,
   type McpScope,
 } from '@/stores/useMcpConfigStore';
@@ -20,6 +19,7 @@ import {
 } from './mcpImport';
 import { useMcpStore } from '@/stores/useMcpStore';
 import { McpOAuthSignIn } from './McpOAuthSignIn';
+import { MCP_DRAFT_OAUTH_UNSET, readCarriedOAuth, type McpOAuthCarried } from './mcpDraft';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { cn } from '@/lib/utils';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
@@ -76,45 +76,12 @@ const formatDuration = (value: string): string | null => {
   return ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`;
 };
 
-/**
- * The OAuth credential fields the page has no editor for. A save rebuilds the
- * whole `oauth` object, so whatever the entry already holds is carried in this
- * shape and written back untouched.
- */
-export const MCP_DRAFT_OAUTH_UNSET = {
-  oauthEnabled: true,
-  oauthClientId: '',
-  oauthClientSecret: '',
-  oauthScope: '',
-  oauthRedirectUri: '',
-  oauthCallbackPort: '',
-} as const satisfies Pick<McpDraft, 'oauthEnabled' | 'oauthClientId' | 'oauthClientSecret' | 'oauthScope' | 'oauthRedirectUri' | 'oauthCallbackPort'>;
-
 /** Message keys for the protocol options; the raw values are config spellings. */
 const MCP_PROTOCOL_LABEL_KEYS = {
   legacy: 'settings.mcp.page.advanced.protocolOption.legacy',
   auto: 'settings.mcp.page.advanced.protocolOption.auto',
   '2026-07-28': 'settings.mcp.page.advanced.protocolOption.revision20260728',
 } as const satisfies Record<McpProtocol, string>;
-
-type McpOAuthCarried = Pick<
-  McpDraft,
-  'oauthEnabled' | 'oauthClientId' | 'oauthClientSecret' | 'oauthScope' | 'oauthRedirectUri' | 'oauthCallbackPort'
->;
-
-/** The stored OAuth block as the form carries it, so a save cannot lose it. */
-const readCarriedOAuth = (oauth: McpOAuthConfig | false | undefined): McpOAuthCarried => {
-  if (oauth === false) return { ...MCP_DRAFT_OAUTH_UNSET, oauthEnabled: false };
-  if (!oauth) return MCP_DRAFT_OAUTH_UNSET;
-  return {
-    oauthEnabled: true,
-    oauthClientId: oauth.client_id ?? '',
-    oauthClientSecret: oauth.client_secret ?? '',
-    oauthScope: oauth.scope ?? '',
-    oauthRedirectUri: oauth.redirect_uri ?? '',
-    oauthCallbackPort: oauth.callback_port === undefined ? '' : String(oauth.callback_port),
-  };
-};
 
 /**
  * The authorization-server metadata document has to be fetchable, so anything
@@ -921,7 +888,7 @@ export const McpPage: React.FC = () => {
 
   // An existing server writes itself; a new one is only created once the user
   // confirms it, so an abandoned draft never reaches disk.
-  const save = React.useCallback(async (): Promise<AutosaveResult> => {
+  const save = async (): Promise<AutosaveResult> => {
     const saved = savedRef.current;
     if (isNewServer || !saved || !selectedMcpName) return AUTOSAVE_UNCHANGED;
     if (JSON.stringify(saved) === JSON.stringify({
@@ -955,13 +922,7 @@ export const McpPage: React.FC = () => {
       return autosaveFailed(result.warning || result.message || t('settings.mcp.page.toast.savedReloadFailed'));
     }
     return AUTOSAVE_SAVED;
-    // `buildDraft` is rebuilt every render from exactly this state.
-  }, [
-    authServerMetadataUrlError, carriedOAuth, codemode, command, currentDirectory, draftScope, enabled,
-    envEntries, headerEntries, isNewServer, mcpType, oauthAuthServerMetadataUrl, protocol,
-    refreshStatus, selectedMcpName, selectionKey, t, timeoutCatalog, timeoutExecution, timeoutStartup,
-    updateMcp, url,
-  ]);
+  };
 
   const autosave = useAutosave(save);
   const { requestSave } = autosave;

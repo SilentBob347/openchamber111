@@ -9,10 +9,9 @@ import { useMobileAutocompleteMaxHeight } from './useMobileAutocompleteMaxHeight
 import {
     PermissionActions,
     PermissionRequestContent,
-    getPermissionToolPresentation,
-    usePermissionFromSubagent,
-    usePermissionResponse,
 } from './PermissionCard';
+import { getPermissionToolPresentation } from './permissionToolPresentation';
+import { usePermissionFromSubagent, usePermissionResponse } from './usePermissionResponse';
 
 /**
  * The agent's permission requests, docked above the composer in the same

@@ -1,8 +1,6 @@
 import React from 'react';
 import type { Message, Part, Session } from '@/lib/opencode/model';
 import { getLastConversationRecord, isIncompleteAssistantTurn } from '@/lib/opencode/model';
-import type { PermissionRequest } from '@/types/permission';
-import type { FormRequest } from '@/lib/opencode/model';
 
 import { ChatInput } from './ChatInput';
 import { ChatColumnSessionContext, type ChatColumnSession } from './chatColumnSession';

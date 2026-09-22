@@ -278,7 +278,8 @@ const overlaySessionRecord = (
     if (typeof archivedAt === 'number') {
       result = { ...result, time: { ...time, archived: archivedAt } };
     } else if ('archived' in time) {
-      const { archived: _dropped, ...rest } = time;
+      const rest = { ...time };
+      delete rest.archived;
       result = { ...result, time: rest };
     }
   }

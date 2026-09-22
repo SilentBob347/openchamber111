@@ -268,7 +268,7 @@ export const useAgentGroupsStore = create<Store>()(
             if (normalize(directoryStore.currentDirectory) === path) {
               directoryStore.setDirectory(projectRef.path, { showOverlay: false });
             }
-          } catch (err) {
+          } catch {
             assertCurrent();
             failedWorktreePaths.push(path);
           }

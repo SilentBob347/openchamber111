@@ -1,10 +1,7 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
 import type { PermissionReply, PermissionRequest } from '@/types/permission';
-import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useRoutingStore } from '@/stores/useRoutingStore';
-import { useSessions } from '@/sync/sync-context';
-import * as sessionActions from '@/sync/session-actions';
 import { WorkerHighlightedCode } from '@/components/code/WorkerHighlightedCode';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Icon } from "@/components/icon/Icon";
@@ -15,9 +12,8 @@ import { getVisiblePermissionPatterns } from './permissionCardPatterns';
 import { permissionFilePreviewsSchema } from './permissionFilePreviews';
 import { formatShortcutForDisplay } from '@/lib/shortcuts';
 import { toolFileDiffs } from '@/lib/opencode/tools';
-
-// Newest pending card owns the keyboard; older cards wait their turn.
-const activePermissionCardIds: string[] = [];
+import { getPermissionToolPresentation, getToolDisplayName } from './permissionToolPresentation';
+import { usePermissionFromSubagent, usePermissionResponse } from './usePermissionResponse';
 
 const PERMISSION_BASH_CUSTOM_STYLE: React.CSSProperties = {
   margin: 0,
@@ -54,63 +50,6 @@ interface PermissionCardProps {
   onResponse?: (response: 'once' | 'always' | 'reject') => void;
 }
 
-const getToolIcon = (toolName: string) => {
-  const iconClass = "h-3 w-3";
-  const tool = toolName.toLowerCase();
-
-  if (tool === 'edit' || tool === 'patch' || tool === 'str_replace' || tool === 'str_replace_based_edit_tool') {
-    return <Icon name="pencil-ai" className={iconClass} />;
-  }
-
-  if (tool === 'write' || tool === 'create' || tool === 'file_write') {
-    return <Icon name="file-edit" className={iconClass} />;
-  }
-
-  if (tool === 'shell' || tool === 'bash' || tool === 'cmd' || tool === 'terminal' || tool === 'shell_command') {
-    return <Icon name="terminal-box" className={iconClass} />;
-  }
-
-  if (tool === 'webfetch' || tool === 'fetch' || tool === 'curl' || tool === 'wget') {
-    return <Icon name="global" className={iconClass} />;
-  }
-
-  if (tool === 'linear' || tool.startsWith('linear_')) {
-    return <Icon name="linear" className={iconClass} />;
-  }
-
-  if (tool === 'cloudflare' || tool.startsWith('cloudflare_') || tool === 'claudflare' || tool.startsWith('claudflare_')) {
-    return <Icon name="cloudflare" className={iconClass} />;
-  }
-
-  return <Icon name="tools" className={iconClass} />;
-};
-
-const getToolDisplayName = (toolName: string): string => {
-  const tool = toolName.toLowerCase();
-
-  if (tool === 'edit' || tool === 'patch' || tool === 'str_replace' || tool === 'str_replace_based_edit_tool') {
-    return 'edit';
-  }
-  if (tool === 'write' || tool === 'create' || tool === 'file_write') {
-    return 'write';
-  }
-  if (tool === 'shell' || tool === 'bash' || tool === 'cmd' || tool === 'terminal' || tool === 'shell_command') {
-    return 'shell';
-  }
-  if (tool === 'webfetch' || tool === 'fetch' || tool === 'curl' || tool === 'wget') {
-    return 'webfetch';
-  }
-
-  return toolName;
-};
-
-/** Icon and short name of the capability a request asks for, for headers. */
-export const getPermissionToolPresentation = (permission: PermissionRequest): { icon: React.ReactNode; name: string } => {
-  // v2 names the requested capability `action` (`shell`, `edit`, `webfetch`, ...).
-  const toolName = permission.action || 'unknown';
-  return { icon: getToolIcon(toolName), name: getToolDisplayName(toolName) };
-};
-
 const SAFETY_KIND_LABEL_KEYS = new Map<string, I18nKey>([
   ['read_only', 'routing.safetyKind.readOnly'],
   ['writes_project', 'routing.safetyKind.writesProject'],
@@ -122,73 +61,6 @@ const SAFETY_KIND_LABEL_KEYS = new Map<string, I18nKey>([
 ]);
 
 const safetyKindLabelKey = (kind: string): I18nKey => SAFETY_KIND_LABEL_KEYS.get(kind) ?? 'routing.safetyKind.unknown';
-
-/** The request was raised by a child of the session the user is looking at. */
-export const usePermissionFromSubagent = (permission: PermissionRequest): boolean => {
-  const sessions = useSessions();
-  const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
-  return React.useMemo(() => {
-    if (!currentSessionId || permission.sessionID === currentSessionId) return false;
-    const sourceSession = sessions.find((session) => session.id === permission.sessionID);
-    return Boolean(sourceSession?.parentID && sourceSession.parentID === currentSessionId);
-  }, [permission.sessionID, currentSessionId, sessions]);
-};
-
-/**
- * Replies to one request and owns its keyboard shortcuts while it is the
- * newest pending one: Alt+Enter allows once, Alt+Shift+Enter always,
- * Alt+Backspace denies. Shared by the inline card and the dock.
- */
-export const usePermissionResponse = (
-  permission: PermissionRequest,
-  onResponse?: (response: PermissionReply) => void,
-) => {
-  const [isResponding, setIsResponding] = React.useState(false);
-  const [hasResponded, setHasResponded] = React.useState(false);
-  const respondToPermission = sessionActions.respondToPermission;
-
-  const respond = React.useCallback(async (response: PermissionReply) => {
-    setIsResponding(true);
-    try {
-      await respondToPermission(permission.sessionID, permission.id, response);
-      setHasResponded(true);
-      onResponse?.(response);
-    } catch (error) {
-      console.error('[PermissionCard] Failed to respond to permission:', error);
-    } finally {
-      setIsResponding(false);
-    }
-  }, [onResponse, permission.id, permission.sessionID, respondToPermission]);
-
-  const respondRef = React.useRef(respond);
-  respondRef.current = respond;
-
-  React.useEffect(() => {
-    if (hasResponded) return;
-    activePermissionCardIds.push(permission.id);
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (activePermissionCardIds.at(-1) !== permission.id) return;
-      if (!event.altKey || event.metaKey || event.ctrlKey) return;
-      const response = event.key === 'Enter'
-        ? (event.shiftKey ? 'always' as const : 'once' as const)
-        : event.key === 'Backspace' && !event.shiftKey
-          ? 'reject' as const
-          : null;
-      if (!response) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void respondRef.current(response);
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-      const index = activePermissionCardIds.lastIndexOf(permission.id);
-      if (index !== -1) activePermissionCardIds.splice(index, 1);
-    };
-  }, [hasResponded, permission.id]);
-
-  return { isResponding, hasResponded, respond };
-};
 
 /** The safety-net hold notice and what the request wants to do. */
 export const PermissionRequestContent: React.FC<{ permission: PermissionRequest }> = ({ permission }) => {

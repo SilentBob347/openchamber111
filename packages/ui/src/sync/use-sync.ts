@@ -9,7 +9,6 @@ import {
   useDirectoryStore,
   useSessionMessageLoader,
   useSyncDirectory,
-  useSyncSDK,
   useSyncRuntime,
   resyncBlockingRequestsForDirectory,
   buildSessionMessageRecordsSnapshot,
@@ -52,7 +51,6 @@ function useSessionCacheTouch() {
 }
 
 export function useSync() {
-  const sdk = useSyncSDK()
   const directory = useSyncDirectory()
   const store = useDirectoryStore()
   const childStores = useChildStoreManager()
@@ -161,7 +159,7 @@ export function useSync() {
       void promise.then(clearInflightRequest, clearInflightRequest)
       return promise
     },
-    [childStores, directory, keyFor, messageLoader, runtimeKey, sdk, store, touch],
+    [childStores, directory, keyFor, messageLoader, runtimeKey, store, touch],
   )
 
   // Load more (pagination)

@@ -31,7 +31,7 @@ import {
   type StructuredError,
   type TokenUsageInfo,
 } from "./model"
-import { projectAssistantContent, projectUserParts, structuredErrorText, toolAttachments, toolOutputText } from "./projection"
+import { projectUserParts, structuredErrorText, toolAttachments, toolOutputText } from "./projection"
 
 // ---------------------------------------------------------------------------
 // Event vocabulary
@@ -800,25 +800,33 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
     // `provider.updated` (and then `model.updated`) for the same change, so
     // acting here too would only double every read.
     case "integration.updated":
+      return []
     // The fork's own `session.created` carries everything the stores need.
     case "session.forked":
+      return []
     // Queue-vs-steer placement of a pending inbox item is not shown.
     case "session.inbox.delivery.changed":
+      return []
     // The update is applied by the desktop/CLI updater, not by the UI;
     // `installation.update-available` is the one the UI acts on.
     case "installation.updated":
+      return []
     // Catalogs OpenChamber does not surface as lists of their own.
     case "models-dev.refreshed":
     case "reference.updated":
     case "websearch.updated":
+      return []
     // Resources of an MCP server; OpenChamber shows connection status only
     // (`mcp.status.changed`).
     case "mcp.resources.changed":
+      return []
     // OpenChamber watches the filesystem through its own server routes.
     case "filesystem.changed":
+      return []
     // Worktrees go through OpenChamber's own git API, not OpenCode's.
     case "worktree.updated":
     case "worktree.resolved":
+      return []
     // Free-standing shells and PTYs are the TUI's and the terminal panel's
     // own transports; neither reads them from this stream.
     case "shell.created":
@@ -830,6 +838,7 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
     case "pty.exited":
     case "persistent-pty.added":
     case "persistent-pty.removed":
+      return []
     // Never framed onto the public stream in 2.0.8, so they cannot reach here
     // and are not listed above: `session.message.content.updated` (replay-only
     // for transcripts written by older releases), `session.usage.recorded`

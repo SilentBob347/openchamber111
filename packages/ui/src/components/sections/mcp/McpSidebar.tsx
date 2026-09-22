@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { selectMcpServersForDirectory, useMcpConfigStore, type McpDraft, type McpServerConfig } from '@/stores/useMcpConfigStore';
-import { MCP_DRAFT_OAUTH_UNSET } from '@/components/sections/mcp/McpPage';
+import { MCP_DRAFT_OAUTH_UNSET } from './mcpDraft';
 import { useShallow } from 'zustand/react/shallow';
 import { useMcpStore } from '@/stores/useMcpStore';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';

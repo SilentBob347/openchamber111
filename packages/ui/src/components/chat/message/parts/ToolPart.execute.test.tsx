@@ -11,7 +11,6 @@ import { I18nProvider } from '@/lib/i18n';
 import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
 import { getDefaultTheme } from '@/lib/theme/themes';
 import { useGuestsStore } from '@/lib/guests/store';
-import type { InstalledGuest } from '@/lib/guests/types';
 
 // Bun does not implement Vite's worker asset-query imports.
 plugin({

@@ -15,7 +15,7 @@ import * as sessionActions from '@/sync/session-actions';
 import { useMobileAutocompleteMaxHeight } from './useMobileAutocompleteMaxHeight';
 import { FormFieldControl } from './FormFieldControl';
 import { FormMarkdown } from './FormMarkdown';
-import { serializeFormAsJson, serializeFormAsMarkdown, stripRecommendedMarker } from './formSerializers';
+import { serializeFormAsJson, serializeFormAsMarkdown } from './formSerializers';
 import {
     type FormValues,
     buildFormAnswer,

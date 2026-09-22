@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { McpServerStatus } from '@/lib/opencode/model';
-import type { McpStatusMap } from './useMcpStore';
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 const deferred = <T>(): Deferred<T> => {

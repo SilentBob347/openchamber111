@@ -77,25 +77,6 @@ const normalize = (value: string): string => {
   return replaced === '/' ? '/' : replaced.replace(/\/+$/, '');
 };
 
-const joinPath = (base: string, segment: string): string => {
-  const normalizedBase = normalize(base);
-  const cleanSegment = segment.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
-  if (!normalizedBase || normalizedBase === '/') {
-    return `/${cleanSegment}`;
-  }
-  return `${normalizedBase}/${cleanSegment}`;
-};
-
-const resolveTilde = (path: string, homeDir: string | null): string => {
-  const trimmed = path.trim();
-  if (!trimmed.startsWith('~')) return trimmed;
-  if (trimmed === '~') return homeDir || trimmed;
-  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
-    return homeDir ? `${homeDir}${trimmed.slice(1)}` : trimmed;
-  }
-  return trimmed;
-};
-
 const toDisplayPath = (resolvedPath: string, options: { currentDirectory: string; homeDirectory: string }): string => {
   const current = normalize(options.currentDirectory);
   const home = normalize(options.homeDirectory);

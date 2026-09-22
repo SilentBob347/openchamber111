@@ -76,12 +76,9 @@ export const isSubagentTool = is(OPENCODE_TOOLS.subagent)
 export const isQuestionTool = is(OPENCODE_TOOLS.question)
 export const isSkillTool = is(OPENCODE_TOOLS.skill)
 export const isReadTool = is(OPENCODE_TOOLS.read)
-const isGlobTool = is(OPENCODE_TOOLS.glob)
 export const isEditTool = is(OPENCODE_TOOLS.edit)
 export const isWriteTool = is(OPENCODE_TOOLS.write)
 export const isPatchTool = is(OPENCODE_TOOLS.patch)
-const isWebFetchTool = is(OPENCODE_TOOLS.webfetch)
-const isWebSearchTool = is(OPENCODE_TOOLS.websearch)
 
 const FILE_CHANGE_TOOLS = new Set<string>([OPENCODE_TOOLS.edit, OPENCODE_TOOLS.write, OPENCODE_TOOLS.patch])
 const EXPLORATION_TOOLS = new Set<string>([
@@ -192,10 +189,6 @@ export type ToolFileDiff = z.infer<typeof fileDiffSchema> & { file: string }
 export function toolInputPath(input: ToolInput | undefined): string | undefined {
   const parsed = readInput(input)
   return parsed.path ?? parsed.filePath ?? parsed.file_path
-}
-
-function toolInputCommand(input: ToolInput | undefined): string | undefined {
-  return readInput(input).command
 }
 
 /**
