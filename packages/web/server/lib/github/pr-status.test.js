@@ -1,21 +1,27 @@
-import { afterEach, beforeEach, describe, expect, mock, test, vi } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
+// `vi.mock` is hoisted by vitest only when written out literally; the shim's
+// `mock.module` runs after the module under test has already been loaded.
+import { vi } from 'vitest';
 
 const listMock = mock(async () => ({ data: [] }));
 
-mock.module('../git/index.js', () => ({
+const isAncestorMock = mock(async () => false);
+
+vi.mock('../git/index.js', () => ({
   getRemotes: async () => [],
   getTrackingBranch: async () => null,
+  isAncestorOfHead: isAncestorMock,
 }));
 
-mock.module('./repo/index.js', () => ({
+vi.mock('./repo/index.js', () => ({
   resolveGitHubRepoFromDirectory: async () => null,
 }));
 
-mock.module('./rate-limit.js', () => ({
+vi.mock('./rate-limit.js', () => ({
   noteIfGitHubRateLimit: () => {},
 }));
 
-const { findBranchPrCandidates, invalidateRepoPullsCache } = await import('./pr-status.js');
+const { findBranchPrCandidates, invalidateRepoPullsCache, isHistoricalPrOfCheckout } = await import('./pr-status.js');
 
 const openPr = {
   number: 15,
@@ -63,7 +69,7 @@ describe('findBranchPrCandidates', () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    setSystemTime();
   });
 
   test('an open PR wins and no history lookup is spent', async () => {
@@ -156,8 +162,7 @@ describe('findBranchPrCandidates', () => {
 
     // Past the "no history" expiry, but far short of the found-record one. The
     // shared open list is re-fetched; the history answer is not re-queried.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(startedAt + 30 * 60 * 1000));
+    setSystemTime(new Date(startedAt + 30 * 60 * 1000));
     const { historical } = await call({ force: false });
 
     expect(historical?.number).toBe(12);
@@ -172,11 +177,34 @@ describe('findBranchPrCandidates', () => {
     await call();
     const callsAfterFirst = listMock.mock.calls.length;
 
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(startedAt + 30 * 60 * 1000));
+    setSystemTime(new Date(startedAt + 30 * 60 * 1000));
     await call({ force: false });
 
     expect(listMock.mock.calls.some((entry) => entry[0]?.state === 'all')).toBe(true);
     expect(listMock.mock.calls.length).toBeGreaterThan(callsAfterFirst + 1);
+  });
+});
+
+describe('isHistoricalPrOfCheckout', () => {
+  beforeEach(() => {
+    isAncestorMock.mockReset();
+  });
+
+  test('a merged PR whose head commit is in the checkout history belongs to it', async () => {
+    isAncestorMock.mockImplementation(async () => true);
+    const pr = { ...mergedPr, head: { ...mergedPr.head, sha: 'abc1234' } };
+    expect(await isHistoricalPrOfCheckout('/repo', pr)).toBe(true);
+    expect(isAncestorMock).toHaveBeenCalledWith('/repo', 'abc1234');
+  });
+
+  test('a reused branch name without the merged commits does not inherit the PR', async () => {
+    isAncestorMock.mockImplementation(async () => false);
+    const pr = { ...mergedPr, head: { ...mergedPr.head, sha: 'abc1234' } };
+    expect(await isHistoricalPrOfCheckout('/repo', pr)).toBe(false);
+  });
+
+  test('a PR without a head sha is never attributed', async () => {
+    expect(await isHistoricalPrOfCheckout('/repo', mergedPr)).toBe(false);
+    expect(isAncestorMock).not.toHaveBeenCalled();
   });
 });

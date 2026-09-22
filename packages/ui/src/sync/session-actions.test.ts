@@ -975,7 +975,7 @@ describe("session restore (unarchive)", () => {
     time: { created: 1, updated: 1, archived },
   })
 
-  beforeEach(() => {
+  beforeEach(async () => {
     replyCalls.length = 0
     registeredSessionDirectories.length = 0
     movedSessionDirectories.length = 0
@@ -988,6 +988,8 @@ describe("session restore (unarchive)", () => {
     runtimeKey = "default-runtime"
     globalHasLoaded = true
     deletedChatDirectories.length = 0
+    const { resetSessionOrdering } = await import("./session-ordering")
+    resetSessionOrdering()
   })
 
   test("does not restore locally until the server returns the restored session", async () => {
@@ -998,6 +1000,8 @@ describe("session restore (unarchive)", () => {
     expect(await unarchiveSession("session-a")).toBe(false)
     expect(globalUpsertedSessions).toEqual([])
     expect(registeredSessionDirectories).toEqual([])
+    const { useSessionOrderingStore } = await import("./session-ordering")
+    expect(useSessionOrderingStore.getState().rankById.has("session-a")).toBe(false)
   })
 
   test("upserts the restored session and re-registers its directory after confirmation", async () => {
@@ -1012,6 +1016,9 @@ describe("session restore (unarchive)", () => {
     expect(openchamberRouteRequests[0].body).toMatchObject({ ids: ["session-a"] })
     expect((globalUpsertedSessions[0] as Session)?.time?.archived).toBe(0)
     expect(registeredSessionDirectories).toEqual([{ sessionID: "session-a", directory: "/test/project" }])
+    const { useSessionOrderingStore } = await import("./session-ordering")
+    const rank = useSessionOrderingStore.getState().rankById.get("session-a")
+    expect(rank ?? 0).toBeGreaterThan(0)
   })
 
   test("fails when the server keeps the session archived", async () => {
@@ -1024,6 +1031,8 @@ describe("session restore (unarchive)", () => {
     expect(await unarchiveSession("session-a")).toBe(false)
     expect(globalUpsertedSessions).toEqual([])
     expect(registeredSessionDirectories).toEqual([])
+    const { useSessionOrderingStore } = await import("./session-ordering")
+    expect(useSessionOrderingStore.getState().rankById.has("session-a")).toBe(false)
   })
 
   test("fails when the answer omits the session that was asked for", async () => {
@@ -1065,6 +1074,8 @@ describe("session restore (unarchive)", () => {
     // The stale response must not reconcile the runtime the user switched to.
     expect(globalUpsertedSessions).toEqual([])
     expect(registeredSessionDirectories).toEqual([])
+    const { useSessionOrderingStore } = await import("./session-ordering")
+    expect(useSessionOrderingStore.getState().rankById.has("session-a")).toBe(false)
   })
 
   test("keeps confirmed sessions and fails the rest when the runtime changes mid-batch", async () => {
