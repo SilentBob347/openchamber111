@@ -69,8 +69,9 @@ session mutations. Check the newest tag before re-asking.
 Answer from the diff. Done when every API-facing change between the pinned
 tag and the newest tag is classified.
 
-1. `git diff --stat vPINNED..vNEWEST -- packages/schema/src packages/protocol/src packages/server/src packages/client packages/plugin/src`
-   in the reference checkout. Ignore `packages/tui`, `packages/app`, `packages/web`.
+1. In the reference checkout: `git fetch origin --tags`, pinned = `opencodeCli.version`,
+   newest = `git tag -l 'v2.*' | sort -V | tail -1`, then
+   `git diff --stat vPINNED..vNEWEST -- packages/schema/src packages/protocol/src packages/server/src packages/client packages/plugin/src`. Ignore `packages/tui`, `packages/app`, `packages/web`.
 2. Classify each change to a route, event, schema or plugin hook:
    **breaks us** (name the consuming OpenChamber file), **fixes a workaround**
    (name the one above that can go and what the user gains), **closes an open
