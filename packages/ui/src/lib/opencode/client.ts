@@ -479,6 +479,12 @@ class OpencodeService {
     this.client = createRuntimeOpencodeClient({ baseUrl: this.baseUrl })
   }
 
+  /**
+   * A send is several awaited mutations (model switch, agent switch, context,
+   * prompt). A runtime switch between any two of them would route the rest to
+   * the other server, so the caller's captured runtime key is re-checked
+   * before every mutation, not only at entry.
+   */
   private assertRuntimeUnchanged(runtimeKey?: string): void {
     if (runtimeKey && runtimeKey !== getRuntimeKey()) {
       throw new Error("Message was not sent because the runtime changed.")
@@ -999,10 +1005,17 @@ class OpencodeService {
   private async applySendSelection(
     sessionID: string,
     selection: { model?: ModelRef; agent?: string },
-    directory?: string | null,
+    directory: string | null | undefined,
+    runtimeKey: string | undefined,
   ): Promise<void> {
-    if (selection.model) await this.switchSessionModel(sessionID, selection.model, directory)
-    if (selection.agent) await this.switchSessionAgent(sessionID, selection.agent, directory)
+    if (selection.model) {
+      this.assertRuntimeUnchanged(runtimeKey)
+      await this.switchSessionModel(sessionID, selection.model, directory)
+    }
+    if (selection.agent) {
+      this.assertRuntimeUnchanged(runtimeKey)
+      await this.switchSessionAgent(sessionID, selection.agent, directory)
+    }
   }
 
   /**
@@ -1049,15 +1062,14 @@ class OpencodeService {
     }
 
     assertProviderCircuitClosed(params.providerID)
-    this.assertRuntimeUnchanged(params.runtimeKey)
-    const client = this.clientFor(params.directory)
 
     try {
-      await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory)
+      await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory, params.runtimeKey)
       for (const item of params.context ?? []) {
         if (!item.text.trim()) continue
+        this.assertRuntimeUnchanged(params.runtimeKey)
         await call("session.synthetic", () =>
-          client.session.synthetic({
+          this.clientFor(params.directory).session.synthetic({
             sessionID: params.id,
             text: item.text,
             description: item.description,
@@ -1067,8 +1079,9 @@ class OpencodeService {
           }),
         )
       }
+      this.assertRuntimeUnchanged(params.runtimeKey)
       await call("session.prompt", () =>
-        client.session.prompt({
+        this.clientFor(params.directory).session.prompt({
           sessionID: params.id,
           id: messageId,
           text: params.text,
@@ -1090,7 +1103,12 @@ class OpencodeService {
     return messageId
   }
 
-  /** Runs a slash command in the session. The server assigns the message id. */
+  /**
+   * Runs a slash command in the session. The server assigns the message id.
+   * Attached context (quoted selections, pinned knowledge) goes in first as
+   * synthetic messages that do not start execution, so the command template
+   * still expands on the server with the context already in the transcript.
+   */
   async sendCommand(params: {
     runtimeKey?: string
     id: string
@@ -1099,13 +1117,28 @@ class OpencodeService {
     command: string
     arguments?: string
     files?: Array<FileInputLite>
+    context?: Array<{ text: string; metadata?: ContextPartMetadata; description?: string }>
     delivery?: SessionInboxDelivery
     directory?: string | null
   }): Promise<void> {
     this.assertRuntimeUnchanged(params.runtimeKey)
     const files = await Promise.all((params.files ?? []).map((file) => this.toPromptFile(file)))
+    await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory, params.runtimeKey)
+    for (const item of params.context ?? []) {
+      if (!item.text.trim()) continue
+      this.assertRuntimeUnchanged(params.runtimeKey)
+      await call("session.synthetic", () =>
+        this.clientFor(params.directory).session.synthetic({
+          sessionID: params.id,
+          text: item.text,
+          description: item.description,
+          metadata: item.metadata ? toJsonRecord(item.metadata) : undefined,
+          delivery: params.delivery,
+          resume: false,
+        }),
+      )
+    }
     this.assertRuntimeUnchanged(params.runtimeKey)
-    await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory)
     await call("session.command", () =>
       this.clientFor(params.directory).session.command({
         sessionID: params.id,

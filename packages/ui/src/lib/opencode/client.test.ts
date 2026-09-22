@@ -258,6 +258,110 @@ describe("sendMessage", () => {
     ).rejects.toThrow("runtime changed")
     expect(requests).toHaveLength(0)
   })
+
+  // A runtime switch while the model switch is in flight: the agent switch,
+  // context and prompt must not go to the new server.
+  test("stops between the model and agent switch when the runtime changes mid-send", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendMessage({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        providerID: "openai",
+        model: { id: "m", providerID: "openai" },
+        agent: "build",
+        text: "hello",
+        context: [{ text: "ctx" }],
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/model"])
+  })
+
+  test("stops before the prompt when the runtime changes after the agent switch", async () => {
+    responses.push(noContent(), () => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendMessage({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        providerID: "openai",
+        model: { id: "m", providerID: "openai" },
+        agent: "build",
+        text: "hello",
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/model", "/api/session/ses_1/agent"])
+  })
+
+  test("stops between context messages when the runtime changes", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return json({ id: "syn_1" })
+    })
+    await expect(
+      opencodeClient.sendMessage({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        providerID: "openai",
+        text: "hello",
+        context: [{ text: "one" }, { text: "two" }],
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/synthetic"])
+  })
+})
+
+describe("sendCommand", () => {
+  test("switches model and agent, then runs the command", async () => {
+    responses.push(noContent(), noContent(), noContent())
+    await opencodeClient.sendCommand({
+      runtimeKey: "test-runtime",
+      id: "ses_1",
+      model: { id: "m", providerID: "openai" },
+      agent: "build",
+      command: "review",
+      arguments: "src",
+    })
+    expect(requests.map((r) => r.url.pathname)).toEqual([
+      "/api/session/ses_1/model",
+      "/api/session/ses_1/agent",
+      "/api/session/ses_1/command",
+    ])
+    expect(requests[2].body).toMatchObject({ name: "review", text: "src" })
+  })
+
+  test("stops after the model switch when the runtime changes mid-command", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendCommand({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        model: { id: "m", providerID: "openai" },
+        agent: "build",
+        command: "review",
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/model"])
+  })
+
+  test("stops before the command when the runtime changes after the agent switch", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendCommand({ runtimeKey: "test-runtime", id: "ses_1", agent: "build", command: "review" }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/agent"])
+  })
 })
 
 describe("messages and config", () => {
@@ -373,5 +477,27 @@ describe("read timeouts (#2470)", () => {
     )
     await new Promise((resolve) => setTimeout(resolve, 60))
     expect(settled).toBe(false)
+  })
+})
+
+describe("sendCommand context", () => {
+  test("delivers attached context as non-resuming synthetic messages before the command", async () => {
+    responses.push(new Response(null, { status: 204 })) // model switch
+    responses.push(new Response(null, { status: 204 })) // agent switch
+    responses.push(json({ data: { id: "msg_ctx" } })) // synthetic
+    responses.push(new Response(null, { status: 204 })) // command
+    await opencodeClient.sendCommand({
+      id: "ses_1",
+      model: { providerID: "p", modelID: "m" },
+      agent: "build",
+      command: "review",
+      arguments: "src",
+      context: [{ text: "quoted selection", description: "Selection" }],
+    })
+    const paths = requests.map((request) => request.url.pathname)
+    expect(paths.at(-2)).toBe("/api/session/ses_1/synthetic")
+    expect(paths.at(-1)).toBe("/api/session/ses_1/command")
+    expect(requests.at(-2)?.body).toMatchObject({ text: "quoted selection", resume: false })
+    expect(requests.at(-1)?.body).toMatchObject({ name: "review", text: "src" })
   })
 })
