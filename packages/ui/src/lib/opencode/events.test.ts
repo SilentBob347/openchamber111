@@ -52,6 +52,27 @@ describe("translateWireEvent", () => {
     expect(cleared).toEqual([{ type: "session.patched", properties: { sessionID: "ses_1", patch: { revert: null } } }])
   })
 
+  test("a committed revert trims from the boundary before dropping the marker", () => {
+    const committed = translateWireEvent({ ...base, type: "session.revert.committed", durable, data: { sessionID: "ses_1", to: "msg_u2" } })
+    expect(committed).toEqual([
+      { type: "session.revert.committed", properties: { sessionID: "ses_1", to: "msg_u2" } },
+      { type: "session.patched", properties: { sessionID: "ses_1", patch: { revert: null } } },
+    ])
+    expect(syncEventSessionID(committed[0])).toBe("ses_1")
+  })
+
+  test("an interruption settles the session unless OpenCode is shutting down", () => {
+    const user = translateWireEvent({ ...base, type: "session.execution.interrupted", durable, data: { sessionID: "ses_1", reason: "user" } })
+    expect(user.map((e) => e.type)).toEqual(["session.patched", "session.idle"])
+    expect(user[0]).toMatchObject({ properties: { patch: { outcome: "interrupted", time: { idle: 1000 } } } })
+    const inactivity = translateWireEvent({ ...base, type: "session.execution.interrupted", durable, data: { sessionID: "ses_1", reason: "inactivity" } })
+    expect(inactivity.map((e) => e.type)).toEqual(["session.patched", "session.idle"])
+    // A shutdown keeps the turn resumable: no outcome, no idle, no local
+    // interruption mark; the reconnect status snapshot decides.
+    const shutdown = translateWireEvent({ ...base, type: "session.execution.interrupted", durable, data: { sessionID: "ses_1", reason: "shutdown" } })
+    expect(shutdown).toEqual([])
+  })
+
   test("execution outcomes settle status and record the outcome", () => {
     const failed = translateWireEvent({
       ...base,

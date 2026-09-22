@@ -81,6 +81,12 @@ describe('translateWireEvent', () => {
     expect(events.some((entry) => entry.type === 'session.error')).toBe(false);
   });
 
+  test('a shutdown interruption is not an abort: the turn resumes after restart', () => {
+    // OpenCode keeps the execution claim across a shutdown and continues the
+    // turn on restart, so nothing here may read as the user pressing Stop.
+    expect(translateWireEvent(wire('session.execution.interrupted', { sessionID: 's1', reason: 'shutdown' }))).toEqual([]);
+  });
+
   test('a failed execution reports a structured error', () => {
     const events = translateWireEvent(wire('session.execution.failed', {
       sessionID: 's1',

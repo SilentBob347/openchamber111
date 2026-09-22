@@ -127,6 +127,33 @@ are re-read when selected or on the next `server.connected`. The pending
 permissions and forms OpenCode rejected on the way out and the turns it
 interrupted arrive as their own events.
 
+## Committing a revert
+
+A staged revert is a marker (`session.revert.messageID`); the transcript
+keeps the reverted messages and hides them. Sending or compacting past the
+marker commits it: OpenCode deletes the boundary message and everything after
+it in one `session.revert.committed` event, with no `message.removed` per
+record. `events.ts` translates it into a `session.revert.committed` sync
+event, which the reducer applies by trimming messages and parts from the
+boundary and dropping the marker in one step, followed by the plain
+`revert: null` patch the global session list needs. The loaded window is
+always the transcript's tail, so a boundary the window does not hold is
+older than everything loaded: the reducer empties the window when the store's
+own marker names the same boundary and leaves it alone otherwise. A local send
+past a revert has already trimmed optimistically, so the event is a no-op for
+it; a commit from another client is applied by the event alone.
+
+## An interruption whose reason is `shutdown`
+
+`session.execution.interrupted` carries a reason. `user`, `inactivity` and
+`superseded` end the turn: the session records an `interrupted` outcome and
+settles idle, which also runs the local interrupted-turn marking below.
+`shutdown` is OpenCode itself going away mid-turn; it keeps the execution
+claim and resumes the drain after restart, records no outcome and leaves the
+assistant message open. The translator emits nothing for it, so the session
+stays as it was until the reconnect status snapshot or the watchdog poll
+reports the authoritative state.
+
 ## Session list rules
 
 Opening a new draft applies its configured model identifier immediately, then
@@ -280,6 +307,8 @@ Cross-directory selectors subscribe to the narrow child-store field they aggrega
 Directories that are not bootstrapped get their initial activity from the host instead: `host-session-status-seed.ts` fetches `/api/sessions/status`, the cross-project map the OpenChamber host keeps from its single upstream event stream, after each global session load. One request, no OpenCode instance creation. The seed is additive only. It adds busy entries (retry collapses to busy; the next live event restores details) for sessions the client has not observed itself, resolves each session's directory from the global session cache, skips entries the host last updated more than 30 minutes ago because nothing reconciles the host map after a stream gap, and never clears anything: the host payload carries no directory, so absence proves nothing. A live event that arrived first wins. In VS Code the webview shim answers the same route from the extension host's activity watcher, whose phases collapse busy and retry and settle themselves, so every entry it reports is current. The remaining gap is intentional and runtime-specific: on desktop with an external OpenCode, a turn that started before the OpenChamber host and has not emitted a status event since shows no dot until its next step.
 
 Pending permissions and forms get the same treatment in `global-blocking-requests.ts`: the dispatcher feeds it `permission.asked`/`permission.replied`, `form.created`/`form.settled`, and `session.deleted` for every directory, and the host seed adds the `pending` map the server keeps from its own stream (`getPendingBlockingRequestsSnapshot` in `session-runtime.js`; dropped on reply, deletion, and OpenCode restart, so it carries no age cutoff). The index keeps only the fields its consumers render (`id`/`sessionID`/`action`/`resources` for a permission, `id`/`sessionID`/`title` for a form), which is also everything the host can carry. It is additive from the seed and never cleared by absence. Directory stores stay the source for open directories and for row badges; the index serves the tray's approval list and any surface without a mounted row. In-app permission and form toasts for a directory without a store are shown from `handleEvent` directly, except in VS Code, whose extension host owns the auto-accept path. VS Code's `/api/sessions/status` shim reports no pending requests.
+
+An MCP elicitation arrives as a `form.created` whose `sessionID` is the `global` sentinel (`LOCATION_SCOPED_FORM_SESSION_ID`): no session record exists for it, so event routing does not treat it as a session address — it is filed by its own directory tag and never enters the session routing index, otherwise a second directory's elicitation would land in the first one's store. The directory store keeps it under `form["global"]`, bootstrap's directory-scoped `form.list` returns it like any pending form, `useScopedBlockingForms` surfaces it from every session of that directory, and reply/cancel resolve the directory from the store that holds it.
 
 Turn-complete and error notifications are recorded before the directory-store lookup in `handleEvent`, so an unopened directory still gets its unread dot. The subtask check reads the directory store when the directory is open and the global session cache otherwise. Event routing likewise consults the global session cache: a session-addressed event with no directory is routed to the directory the cache records for that session before any active-session or single-store fallback, so another project's events cannot land in the one open store.
 

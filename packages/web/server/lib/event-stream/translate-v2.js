@@ -154,15 +154,26 @@ export function translateWireEvent(payload) {
       if (!sessionID) return [];
       return [status({ type: 'idle' }), event('session.idle', { sessionID })];
 
-    case 'session.execution.interrupted':
+    case 'session.execution.interrupted': {
       if (!sessionID) return [];
-      // An interruption ends the turn without failing it: consumers that treat
-      // `session.error` as a failure must not fire, but the queue and goal
-      // runtimes still have to know the turn was aborted.
+      const reason = trimmed(data.reason) || 'user';
+      // A shutdown is not the end of the turn: OpenCode keeps the execution
+      // claim and the resumed drain continues the same turn after restart
+      // (v2.0.14 `session/execution.ts` settled(), `projector.ts` projectIdle,
+      // `message-updater.ts`), and none of its own projections mark the
+      // session idle. Reporting it as an abort would make the goal runtime
+      // pause the goal as a user stop and the queue hold the next prompt, so
+      // it produces nothing: the session stays busy until OpenCode resumes it
+      // and reports the real terminal outcome.
+      if (reason === 'shutdown') return [];
+      // Every other interruption ends the turn without failing it: consumers
+      // that treat `session.error` as a failure must not fire, but the queue
+      // and goal runtimes still have to know the turn was aborted.
       return [
         status({ type: 'idle' }),
-        event('session.idle', { sessionID, aborted: true, reason: trimmed(data.reason) || 'user', error: ABORTED_ERROR }),
+        event('session.idle', { sessionID, aborted: true, reason, error: ABORTED_ERROR }),
       ];
+    }
 
     case 'session.execution.failed':
       if (!sessionID) return [];

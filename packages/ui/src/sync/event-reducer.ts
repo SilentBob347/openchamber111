@@ -55,6 +55,17 @@ function getUpdatedDeltaFields(previous: Part, next: Part): string[] {
   return []
 }
 
+/**
+ * A text or reasoning `ended` snapshot carries only its own timestamp as
+ * `start`; the start streamed earlier is the real one and stays.
+ */
+function withStreamedStart(previous: Part, next: Part): Part {
+  if (next.type !== "text" && next.type !== "reasoning") return next
+  if (previous.type !== next.type || !previous.time || !next.time) return next
+  if (next.time.end === undefined || previous.time.start >= next.time.start) return next
+  return { ...next, time: { ...next.time, start: previous.time.start } }
+}
+
 function getPartEndTime(part: Part): number | undefined {
   if (part.type === "tool") {
     return part.state.status === "completed" || part.state.status === "error" ? part.state.time.end : undefined
@@ -358,6 +369,35 @@ export function applyDirectoryEvent(
       return true
     }
 
+    case "session.revert.committed": {
+      // OpenCode deleted the boundary message and everything after it without
+      // per-message removals, so the same range goes here. The loaded window
+      // is always the transcript's tail: a boundary the window does not hold
+      // is older than everything loaded, so a matching marker trims it all.
+      const { sessionID, to } = event.properties
+      const sessions = draft.session
+      const result = Binary.search(sessions, sessionID, (s) => s.id)
+      const session = result.found ? sessions[result.index] : undefined
+      const messages = draft.message[sessionID]
+      let changed = false
+      if (messages && messages.length > 0) {
+        const index = findMessageIndex(messages, to)
+        const from = index >= 0 ? index : session?.revert?.messageID === to ? 0 : -1
+        if (from >= 0) {
+          for (const removed of messages.slice(from)) delete draft.part[removed.id]
+          draft.message[sessionID] = messages.slice(0, from)
+          changed = true
+        }
+      }
+      if (session?.revert) {
+        const { revert: _revert, ...rest } = session
+        sessions[result.index] = rest
+        markSessionEvent(sessionID, false)
+        changed = true
+      }
+      return changed
+    }
+
     case "session.deleted": {
       const sessions = draft.session
       const { sessionID } = event.properties
@@ -516,11 +556,12 @@ export function applyDirectoryEvent(
           return false
         }
         const dedupeFields = getUpdatedDeltaFields(previous, part)
+        const settled = withStreamedStart(previous, part)
         // SAFETY: the dedupe marker is a private annotation the delta reducer
         // strips again; the part itself is unchanged.
         next[partIndex] = dedupeFields.length > 0
-          ? ({ ...part, __dedupeNextDeltaFields: dedupeFields } as Part & DedupeMetadata)
-          : part
+          ? ({ ...settled, __dedupeNextDeltaFields: dedupeFields } as Part & DedupeMetadata)
+          : settled
       } else {
         next.push(part)
       }

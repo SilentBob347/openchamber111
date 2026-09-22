@@ -74,6 +74,45 @@ describe("session events", () => {
     expect("revert" in draft.session[0]).toBe(false)
   })
 
+  describe("committing a revert", () => {
+    const user = (id: string, created: number): Message => ({ id, sessionID: "ses_1", role: "user", time: { created } })
+    const part = (messageID: string): Part => ({ id: `${messageID}:text:0`, sessionID: "ses_1", messageID, type: "text", text: "t" })
+    const transcript = () => [user("msg_u1", 1), assistant({ id: "msg_a1", time: { created: 2 } }), user("msg_u2", 3), assistant({ id: "msg_a2", time: { created: 4 } })]
+    const parts = () => ({ msg_a1: [part("msg_a1")], msg_u2: [part("msg_u2")], msg_a2: [part("msg_a2")] })
+
+    test("drops the boundary message and everything after it, with their parts and the marker", () => {
+      // A commit this client staged and then sent past.
+      const draft = state({ session: [session({ revert: { messageID: "msg_u2" } })], message: { ses_1: transcript() }, part: parts() })
+      expect(apply(draft, { type: "session.revert.committed", properties: { sessionID: "ses_1", to: "msg_u2" } })).toBe(true)
+      expect(draft.message.ses_1.map((m) => m.id)).toEqual(["msg_u1", "msg_a1"])
+      expect(Object.keys(draft.part)).toEqual(["msg_a1"])
+      expect("revert" in draft.session[0]).toBe(false)
+    })
+
+    test("a commit from another client trims without a local marker", () => {
+      const draft = state({ message: { ses_1: transcript() }, part: parts() })
+      expect(apply(draft, { type: "session.revert.committed", properties: { sessionID: "ses_1", to: "msg_u2" } })).toBe(true)
+      expect(draft.message.ses_1.map((m) => m.id)).toEqual(["msg_u1", "msg_a1"])
+      expect(draft.part.msg_a2).toBeUndefined()
+    })
+
+    test("a boundary older than the loaded window empties it only when the marker agrees", () => {
+      const agreed = state({ session: [session({ revert: { messageID: "msg_old" } })], message: { ses_1: transcript() }, part: parts() })
+      expect(apply(agreed, { type: "session.revert.committed", properties: { sessionID: "ses_1", to: "msg_old" } })).toBe(true)
+      expect(agreed.message.ses_1).toEqual([])
+      expect(Object.keys(agreed.part)).toEqual([])
+
+      const unknown = state({ message: { ses_1: transcript() }, part: parts() })
+      expect(apply(unknown, { type: "session.revert.committed", properties: { sessionID: "ses_1", to: "msg_old" } })).toBe(false)
+      expect(unknown.message.ses_1.map((m) => m.id)).toEqual(["msg_u1", "msg_a1", "msg_u2", "msg_a2"])
+    })
+
+    test("is a no-op for a session with nothing loaded and no marker", () => {
+      const draft = state({ message: {} })
+      expect(apply(draft, { type: "session.revert.committed", properties: { sessionID: "ses_1", to: "msg_u2" } })).toBe(false)
+    })
+  })
+
   test("an archive patch drops the session and its caches", () => {
     const draft = state({ session_status: { ses_1: { type: "busy" } }, sessionTotal: 1 })
     apply(draft, { type: "session.patched", properties: { sessionID: "ses_1", patch: { time: { archived: 9 } } } })
@@ -208,13 +247,13 @@ describe("message events", () => {
 })
 
 describe("streaming parts", () => {
-  const textPart = (text: string, end?: number): Part => ({
+  const textPart = (text: string, end?: number, start = 10): Part => ({
     id: "msg_a:text:0",
     sessionID: "ses_1",
     messageID: "msg_a",
     type: "text",
     text,
-    time: end === undefined ? { start: 10 } : { start: 10, end },
+    time: end === undefined ? { start } : { start, end },
   })
 
   test("deltas grow a text part and a final snapshot dedupes an overlapping delta", () => {
@@ -226,6 +265,19 @@ describe("streaming parts", () => {
     apply(draft, { type: "message.part.updated", properties: { sessionID: "ses_1", part: textPart("hello wor", undefined) } })
     apply(draft, { type: "message.part.delta", properties: { sessionID: "ses_1", messageID: "msg_a", partID: "msg_a:text:0", field: "text", delta: "world" } })
     expect(draft.part.msg_a[0]).toMatchObject({ text: "hello world" })
+  })
+
+  test("the ended snapshot keeps the start the stream began with", () => {
+    const draft = state()
+    apply(draft, { type: "message.part.updated", properties: { sessionID: "ses_1", part: textPart("", undefined, 2000) } })
+    apply(draft, { type: "message.part.updated", properties: { sessionID: "ses_1", part: textPart("done", 6000, 6000) } })
+    expect(draft.part.msg_a[0]).toMatchObject({ text: "done", time: { start: 2000, end: 6000 } })
+
+    const reasoning = state()
+    const thought = (time: { start: number; end?: number }): Part => ({ id: "msg_a:reasoning:0", sessionID: "ses_1", messageID: "msg_a", type: "reasoning", text: "why", time })
+    apply(reasoning, { type: "message.part.updated", properties: { sessionID: "ses_1", part: thought({ start: 2000 }) } })
+    apply(reasoning, { type: "message.part.updated", properties: { sessionID: "ses_1", part: thought({ start: 6000, end: 6000 }) } })
+    expect(reasoning.part.msg_a[0]).toMatchObject({ time: { start: 2000, end: 6000 } })
   })
 
   test("a delta for a part that never started asks for materialization", () => {

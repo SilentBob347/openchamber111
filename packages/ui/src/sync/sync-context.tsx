@@ -492,6 +492,14 @@ function pruneExternallyViewedSessions(now = Date.now()) {
     }
   }
 }
+/**
+ * The session id OpenCode gives a form no session owns: an MCP elicitation is
+ * raised by a server of the whole location (directory), not by a turn. See
+ * `GLOBAL_ELICITATION_SESSION_ID` in OpenCode's `packages/core/src/mcp/index.ts`.
+ * Replies go to `/session/global/form/:id`, so the sentinel is kept as-is.
+ */
+export const LOCATION_SCOPED_FORM_SESSION_ID = "global"
+
 const pendingFormToastIds = new Set<string>()
 const pendingPermissionToastIds = new Set<string>()
 const pendingVSCodePermissionEvents = new Map<string, symbol>()
@@ -513,6 +521,13 @@ const getFormToastKey = (sessionID?: string, requestID?: string) => {
 
 /** A pending form has no question text on the wire — only the form's title. */
 const FORM_TOAST_DESCRIPTION = "Agent is waiting for your input"
+
+/** A location-scoped form names no session to open; the toast then only announces it. */
+const formToastAction = (sessionID: string, directory: string) => (
+  sessionID === LOCATION_SCOPED_FORM_SESSION_ID
+    ? undefined
+    : { label: "Open session", onClick: () => openSessionFromToast(sessionID, directory) }
+)
 
 /** Blank server strings mean "absent" here, not "empty title". */
 const trimmedOrUndefined = (value: string | undefined): string | undefined => {
@@ -595,6 +610,11 @@ export function setExternallyViewedSession(directory: string, sessionId: string,
 
 function isViewedInCurrentSession(directory: string, sessionId?: string): boolean {
   if (!sessionId) return false
+  // A location-scoped form is docked in whichever session of its directory is
+  // open, so looking at any session there is looking at the form.
+  if (sessionId === LOCATION_SCOPED_FORM_SESSION_ID) {
+    return Boolean(_activeDirectory && _activeSession && directory === _activeDirectory && isSurfaceAttended())
+  }
   if (
     _activeDirectory && _activeSession
     && directory === _activeDirectory && sessionId === _activeSession
@@ -1059,7 +1079,11 @@ const resolveDirectoryFromRoutingIndex = (
 ): string => {
   const normalizedDirectory = normalizeEventDirectory(rawDirectory)
 
-  const sessionID = syncEventSessionID(payload)
+  // A location-scoped form names the "global" sentinel, not a session: no
+  // store lists it, and indexing it would file the next directory's
+  // elicitation into the first one's store. Its own directory tag routes it.
+  const addressedSessionID = syncEventSessionID(payload)
+  const sessionID = addressedSessionID === LOCATION_SCOPED_FORM_SESSION_ID ? undefined : addressedSessionID
   if (sessionID) {
     if (normalizedDirectory && normalizedDirectory !== "global" && childStoreHasSessionState(childStores, normalizedDirectory, sessionID, batch)) {
       setIndexedSessionDirectory(routingIndex, sessionID, normalizedDirectory)
@@ -1129,7 +1153,7 @@ const resolveDirectoryFromRoutingIndex = (
 
   // Single-store fallback: if there's only one directory, use it
   if (
-    (sessionID || messageID)
+    (addressedSessionID || messageID)
     && (!normalizedDirectory || normalizedDirectory === "global")
     && childStores.children.size === 1
   ) {
@@ -1169,7 +1193,7 @@ const updateRoutingIndexFromEvent = (
   }
 
   const sessionID = syncEventSessionID(payload)
-  if (sessionID) {
+  if (sessionID && sessionID !== LOCATION_SCOPED_FORM_SESSION_ID) {
     setIndexedSessionDirectory(routingIndex, sessionID, directory)
   }
 
@@ -1268,10 +1292,7 @@ export async function resyncBlockingRequestsForDirectory(
         toast.info(form.title, {
           id: `form-${toastKey}`,
           description: FORM_TOAST_DESCRIPTION,
-          action: {
-            label: "Open session",
-            onClick: () => openSessionFromToast(sessionId, directory),
-          },
+          action: formToastAction(sessionId, directory),
         })
       }
     }
@@ -1540,10 +1561,7 @@ const notifyFormCreated = (form: FormRequest, directory: string): void => {
   toast.info(form.title, {
     id: `form-${toastKey}`,
     description: FORM_TOAST_DESCRIPTION,
-    action: {
-      label: "Open session",
-      onClick: () => openSessionFromToast(sessionID, directory),
-    },
+    action: formToastAction(sessionID, directory),
   })
 }
 
@@ -1847,6 +1865,11 @@ export function handleEvent(
       cloneField("message", (value) => ({ ...value }))
       break
     case "message.removed":
+      cloneField("message", (value) => ({ ...value }))
+      cloneField("part", (value) => ({ ...value }))
+      break
+    case "session.revert.committed":
+      cloneField("session", (value) => [...value])
       cloneField("message", (value) => ({ ...value }))
       cloneField("part", (value) => ({ ...value }))
       break
@@ -3036,6 +3059,25 @@ export function useSessions(directory?: string) {
 const selectPermissionRequestsBySession = (state: State) => state.permission
 const selectFormRequestsBySession = (state: State) => state.form
 
+/**
+ * Forms for the composer of `sessionID`: the session subtree's own, then the
+ * directory's location-scoped ones. A location-scoped form has no session to
+ * be viewed from, so every session of its directory offers it; the answer is
+ * still sent to that directory's OpenCode instance because the reply
+ * resolves its directory from the store that holds the form.
+ */
+export const collectComposerForms = (
+  sessions: Session[],
+  formsBySession: Record<string, FormRequest[] | undefined>,
+  sessionID: string | null,
+  empty: FormRequest[],
+): FormRequest[] => {
+  const own = collectScopedBlockingRequests(sessions, formsBySession, sessionID, empty)
+  const locationScoped = sessionID ? formsBySession[LOCATION_SCOPED_FORM_SESSION_ID] : undefined
+  if (!locationScoped || locationScoped.length === 0) return own
+  return own === empty ? locationScoped : [...own, ...locationScoped]
+}
+
 type ScopedBlockingRequestCache<T extends { id: string }> = {
   sessionID: string | null
   sessions: Session[] | null
@@ -3048,6 +3090,12 @@ function useScopedBlockingRequests<T extends { id: string }>(
   directory: string | undefined,
   selectRequestsBySession: (state: State) => Record<string, T[] | undefined>,
   empty: T[],
+  collect: (
+    sessions: Session[],
+    requestsBySession: Record<string, T[] | undefined>,
+    sessionID: string | null,
+    empty: T[],
+  ) => T[] = collectScopedBlockingRequests,
 ): T[] {
   const cacheRef = useRef<ScopedBlockingRequestCache<T>>({
     sessionID: null,
@@ -3068,7 +3116,7 @@ function useScopedBlockingRequests<T extends { id: string }>(
         return cache.result
       }
 
-      const next = collectScopedBlockingRequests(state.session, requestsBySession, sessionID, empty)
+      const next = collect(state.session, requestsBySession, sessionID, empty)
       const result = areRequestArraysReferentiallyEqual(cache.result, next) ? cache.result : next
       cacheRef.current = {
         sessionID,
@@ -3077,7 +3125,7 @@ function useScopedBlockingRequests<T extends { id: string }>(
         result,
       }
       return result
-    }, [empty, selectRequestsBySession, sessionID]),
+    }, [collect, empty, selectRequestsBySession, sessionID]),
     directory,
   )
 }
@@ -3087,7 +3135,7 @@ export function useScopedBlockingPermissions(sessionID: string | null, directory
 }
 
 export function useScopedBlockingForms(sessionID: string | null, directory?: string): FormRequest[] {
-  return useScopedBlockingRequests(sessionID, directory, selectFormRequestsBySession, EMPTY_FORM_REQUESTS)
+  return useScopedBlockingRequests(sessionID, directory, selectFormRequestsBySession, EMPTY_FORM_REQUESTS, collectComposerForms)
 }
 
 const sessionsByIdCache = new WeakMap<State["session"], Map<string, Session>>()

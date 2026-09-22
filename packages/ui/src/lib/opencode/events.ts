@@ -99,6 +99,13 @@ export type SyncEvent =
   | { type: "session.created"; properties: { info: Session } }
   | { type: "session.patched"; properties: { sessionID: string; patch: SessionPatch } }
   | { type: "session.deleted"; properties: { sessionID: string } }
+  /**
+   * A staged revert became permanent: OpenCode deleted the boundary message
+   * `to` and everything after it. The reducer trims the same range locally,
+   * because no `message.removed` follows and a later fetch keeps whatever the
+   * store still holds.
+   */
+  | { type: "session.revert.committed"; properties: { sessionID: string; to: string } }
   | { type: "session.status"; properties: { sessionID: string; status: SessionStatus } }
   | { type: "session.idle"; properties: { sessionID: string } }
   | { type: "session.error"; properties: { sessionID: string; error: StructuredError } }
@@ -288,8 +295,14 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
     case "session.revert.staged":
       return [sessionEvent(event.data.sessionID, { revert: event.data.revert })]
     case "session.revert.cleared":
-    case "session.revert.committed":
       return [sessionEvent(event.data.sessionID, { revert: null })]
+    case "session.revert.committed":
+      // Trim first, then drop the marker; the global session list only needs
+      // the marker gone.
+      return [
+        { type: "session.revert.committed", properties: { sessionID: event.data.sessionID, to: event.data.to } },
+        sessionEvent(event.data.sessionID, { revert: null }),
+      ]
 
     // --- live status --------------------------------------------------------
 
@@ -305,6 +318,13 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
         { type: "session.idle", properties: { sessionID: event.data.sessionID } },
       ]
     case "session.execution.interrupted":
+      // `shutdown` is OpenCode itself going away mid-turn. It keeps the
+      // execution claim and resumes the drain on restart, records no idle
+      // outcome and leaves the assistant message open, so the UI must not
+      // settle the session or mark the turn interrupted either: the status
+      // snapshot after reconnect is the authority. Every other reason is a
+      // real stop.
+      if (event.data.reason === "shutdown") return []
       return [
         sessionEvent(event.data.sessionID, { outcome: "interrupted", time: { idle: event.created, updated: event.created } }),
         { type: "session.idle", properties: { sessionID: event.data.sessionID } },
@@ -505,6 +525,8 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
           },
         },
       ]
+    // `ended` carries no start; the reducer keeps the start it saw on
+    // `started`, and this one only stands in when the stream was joined late.
     case "session.text.ended":
       return [
         partUpdated(event.data.sessionID, {
@@ -850,6 +872,7 @@ export function syncEventSessionID(event: SyncEvent): string | undefined {
       return event.properties.form.sessionID
     case "session.patched":
     case "session.deleted":
+    case "session.revert.committed":
     case "session.status":
     case "session.idle":
     case "session.error":
