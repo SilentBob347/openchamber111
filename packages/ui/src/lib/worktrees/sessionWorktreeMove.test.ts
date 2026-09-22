@@ -243,6 +243,7 @@ const makeWorktreeMetadata = (overrides: Partial<WorktreeMetadata> = {}): Worktr
 const makeMoveMessages = (): SessionTreeMoveMessages => ({
   success: 'move succeeded',
   failure: 'move failed',
+  outcomeUnknown: 'worktree kept',
 });
 
 const makeQuickIntent = (): SessionTreeMoveIntent => ({
@@ -784,7 +785,7 @@ describe('moveSessionTreeToExistingWorktree', () => {
     requestSessionTreeMove(makeQuickIntent());
 
     await waitFor(() => toastErrors.length === 1);
-    expect(toastErrors).toEqual([{ title: 'move failed', description: 'Request timed out' }]);
+    expect(toastErrors).toEqual([{ title: 'move failed', description: 'worktree kept' }]);
     expect(removeWorktreeCalls).toEqual([]);
     expect(refreshCalls).toEqual([['/source', '/created-worktree']]);
   });
@@ -804,7 +805,7 @@ describe('moveSessionTreeToExistingWorktree', () => {
     });
 
     await waitFor(() => toastErrors.length === 1);
-    expect(toastErrors).toEqual([{ title: 'move failed', description: 'Request timed out' }]);
+    expect(toastErrors).toEqual([{ title: 'move failed', description: 'worktree kept' }]);
     expect(moveCalls).toEqual([
       { sessionId: 'child', sourceDirectory: '/source', destinationDirectory: '/created-worktree' },
     ]);
@@ -827,7 +828,7 @@ describe('moveSessionTreeToExistingWorktree', () => {
     });
 
     await waitFor(() => toastErrors.length === 1);
-    expect(toastErrors).toEqual([{ title: 'move failed', description: 'Request timed out' }]);
+    expect(toastErrors).toEqual([{ title: 'move failed', description: 'worktree kept' }]);
     // The definitely moved child rolls back; the root's placement is unknown.
     expect(moveCalls).toEqual([
       { sessionId: 'child', sourceDirectory: '/source', destinationDirectory: '/created-worktree' },

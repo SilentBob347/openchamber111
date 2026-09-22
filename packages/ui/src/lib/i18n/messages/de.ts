@@ -3153,6 +3153,7 @@ export const dict = {
   'sessions.sidebar.session.menu.newWorktree': 'Neuer Worktree...',
   'sessions.sidebar.session.moveToWorktree.success': 'Sitzung in einen neuen Worktree verschoben',
   'sessions.sidebar.session.moveToWorktree.failed': 'Sitzung konnte nicht in einen neuen Worktree verschoben werden',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': 'Der neue Worktree wurde behalten: die Verschiebung kann auf dem Server noch abgeschlossen werden.',
   'sessions.sidebar.session.moveToWorktree.main': 'Haupt-Worktree',
   'sessions.sidebar.session.moveToWorktree.refreshing': 'Worktrees werden aktualisiert...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': 'Worktrees konnten nicht geladen werden',

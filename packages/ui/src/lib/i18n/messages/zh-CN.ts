@@ -593,6 +593,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.newWorktree': '新建工作树...',
   'sessions.sidebar.session.moveToWorktree.success': '会话已移至新工作树',
   'sessions.sidebar.session.moveToWorktree.failed': '无法将会话移至新工作树',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': '已保留新的 worktree：移动可能仍会在服务器上完成。',
   'sessions.sidebar.session.moveToWorktree.main': '主工作树',
   'sessions.sidebar.session.moveToWorktree.refreshing': '正在刷新工作树...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': '无法加载工作树',

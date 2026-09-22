@@ -385,6 +385,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.newWorktree': 'Nowy worktree...',
   'sessions.sidebar.session.moveToWorktree.success': 'Sesja została przeniesiona do nowego worktree',
   'sessions.sidebar.session.moveToWorktree.failed': 'Nie udało się przenieść sesji do nowego worktree',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': 'Nowy worktree został zachowany: przeniesienie może jeszcze zakończyć się na serwerze.',
   'sessions.sidebar.session.moveToWorktree.main': 'Główny worktree',
   'sessions.sidebar.session.moveToWorktree.refreshing': 'Odświeżanie worktree...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': 'Nie udało się wczytać worktree',

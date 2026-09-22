@@ -572,6 +572,7 @@ export const dict = {
   'sessions.sidebar.session.menu.moveToWorktree': 'Yeni worktree\'ye taşı',
   'sessions.sidebar.session.moveToWorktree.success': 'Session yeni bir worktree\'ye taşındı',
   'sessions.sidebar.session.moveToWorktree.failed': 'Session yeni bir worktree\'ye taşınamadı',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': 'Yeni worktree korundu: taşıma sunucuda hâlâ tamamlanabilir.',
   'sessions.sidebar.session.moveToWorktree.tooltip': 'Geçerli branch\'ten yeni bir worktree oluşturur ve bu session\'ı alt session\'larıyla birlikte oraya taşır. Commit edilmemiş değişiklikler kaynak worktree\'de kalır.',
   'sessions.sidebar.session.moveToWorktree.tooltipBusy': 'Session boşta olduğunda kullanılabilir. Geçerli etkinliği durdur veya bitmesini bekle.',
   'sessions.sidebar.session.moveToWorktree.tooltipMoving': 'Bu session zaten yeni bir worktree\'ye taşınıyor.',

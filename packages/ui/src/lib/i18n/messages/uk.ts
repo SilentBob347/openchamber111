@@ -593,6 +593,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.session.menu.newWorktree": "Новий worktree...",
   "sessions.sidebar.session.moveToWorktree.success": "Сесію перенесено в новий worktree",
   "sessions.sidebar.session.moveToWorktree.failed": "Не вдалося перенести сесію в новий worktree",
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': 'Новий worktree збережено: переміщення ще може завершитися на сервері.',
   "sessions.sidebar.session.moveToWorktree.main": "Основний worktree",
   "sessions.sidebar.session.moveToWorktree.refreshing": "Оновлення worktree...",
   "sessions.sidebar.session.moveToWorktree.loadFailed": "Не вдалося завантажити worktree",

@@ -593,6 +593,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.session.menu.newWorktree": "Novo worktree...",
   "sessions.sidebar.session.moveToWorktree.success": "Sessão movida para um novo worktree",
   "sessions.sidebar.session.moveToWorktree.failed": "Não foi possível mover a sessão para um novo worktree",
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': 'O novo worktree foi mantido: a movimentação ainda pode ser concluída no servidor.',
   "sessions.sidebar.session.moveToWorktree.main": "Worktree principal",
   "sessions.sidebar.session.moveToWorktree.refreshing": "Atualizando worktrees...",
   "sessions.sidebar.session.moveToWorktree.loadFailed": "Não foi possível carregar os worktrees",

@@ -606,6 +606,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.newWorktree': '新增工作樹...',
   'sessions.sidebar.session.moveToWorktree.success': '工作階段已移至新工作樹',
   'sessions.sidebar.session.moveToWorktree.failed': '無法將工作階段移至新工作樹',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': '已保留新的 worktree：移動可能仍會在伺服器上完成。',
   'sessions.sidebar.session.moveToWorktree.main': '主要工作樹',
   'sessions.sidebar.session.moveToWorktree.refreshing': '正在重新整理工作樹...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': '無法載入工作樹',

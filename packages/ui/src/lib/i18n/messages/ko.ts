@@ -593,6 +593,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.newWorktree': '새 worktree...',
   'sessions.sidebar.session.moveToWorktree.success': '세션을 새 worktree로 이동했습니다',
   'sessions.sidebar.session.moveToWorktree.failed': '세션을 새 worktree로 이동하지 못했습니다',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': '새 worktree를 유지했습니다. 이동이 서버에서 아직 완료될 수 있습니다.',
   'sessions.sidebar.session.moveToWorktree.main': '메인 worktree',
   'sessions.sidebar.session.moveToWorktree.refreshing': 'worktree 새로 고침 중...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': 'worktree를 불러오지 못했습니다',

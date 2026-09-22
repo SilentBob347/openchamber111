@@ -592,6 +592,7 @@ export const dict = {
   'sessions.sidebar.session.menu.newWorktree': 'New worktree...',
   'sessions.sidebar.session.moveToWorktree.success': 'Session moved to a new worktree',
   'sessions.sidebar.session.moveToWorktree.failed': 'Failed to move session to a new worktree',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': 'The new worktree was kept: the move may still complete on the server.',
   'sessions.sidebar.session.moveToWorktree.main': 'Main worktree',
   'sessions.sidebar.session.moveToWorktree.refreshing': 'Refreshing worktrees...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': 'Worktrees could not be loaded',

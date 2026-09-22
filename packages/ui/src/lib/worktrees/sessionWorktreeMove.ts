@@ -16,6 +16,8 @@ import { create } from 'zustand';
 export type SessionTreeMoveMessages = {
   success: string;
   failure: string;
+  /** Description under the failure toast when the answer was lost and the new worktree was kept. */
+  outcomeUnknown: string;
 };
 
 export const buildSessionTreeMoveMessages = (
@@ -24,7 +26,16 @@ export const buildSessionTreeMoveMessages = (
 ): SessionTreeMoveMessages => ({
   success: t(keys.success),
   failure: t(keys.failure),
+  outcomeUnknown: t('sessions.sidebar.session.moveToWorktree.outcomeUnknown'),
 });
+
+/** The move request lost its answer after a new worktree was created; the worktree stays. */
+export class SessionMoveOutcomeUnknownError extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = 'SessionMoveOutcomeUnknownError';
+  }
+}
 
 export type SessionTreeMoveIntent =
   | {
@@ -246,6 +257,9 @@ const moveSessionTreeTransaction = async (
       if (destination?.onMoveFailure && !moveOutcomeUnknown) {
         return destination.onMoveFailure(moveError);
       }
+      if (destination?.onMoveFailure && moveOutcomeUnknown) {
+        throw new SessionMoveOutcomeUnknownError(moveError);
+      }
       throw moveError;
     }
     useSessionUIStore.getState().setWorktreeMetadata(input.root.id, getLatestWorktreeMetadata(destination.metadata));
@@ -327,7 +341,9 @@ const executeSessionTreeMove = (intent: SessionTreeMoveIntent): void => {
     .then(() => toast.success(intent.messages.success))
     .catch((error) => {
       const failure = error instanceof Error ? error : new Error(String(error));
-      toast.error(intent.messages.failure, { description: failure.message });
+      toast.error(intent.messages.failure, {
+        description: failure instanceof SessionMoveOutcomeUnknownError ? intent.messages.outcomeUnknown : failure.message,
+      });
     });
 };
 

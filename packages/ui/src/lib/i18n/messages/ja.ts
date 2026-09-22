@@ -593,6 +593,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.newWorktree': '新しいworktree...',
   'sessions.sidebar.session.moveToWorktree.success': 'セッションを新しいworktreeへ移動しました',
   'sessions.sidebar.session.moveToWorktree.failed': 'セッションを新しいworktreeへ移動できませんでした',
+  'sessions.sidebar.session.moveToWorktree.outcomeUnknown': '新しい worktree は残しました。移動はサーバー側でまだ完了する可能性があります。',
   'sessions.sidebar.session.moveToWorktree.main': 'メインworktree',
   'sessions.sidebar.session.moveToWorktree.refreshing': 'worktreeを更新しています...',
   'sessions.sidebar.session.moveToWorktree.loadFailed': 'worktreeを読み込めませんでした',
