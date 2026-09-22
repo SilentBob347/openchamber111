@@ -29,6 +29,11 @@ const createRuntime = ({ stored, fetchImpl, retryDelaysMs = [0], evaluatePermiss
   };
 };
 
+const directoryHeader = (init) => {
+  const value = init?.headers?.['x-opencode-directory'];
+  return typeof value === 'string' ? decodeURIComponent(value) : null;
+};
+
 const flush = async () => {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();
 };
@@ -62,6 +67,19 @@ describe('permission auto-accept runtime', () => {
     await expect(runtime.isSessionAutoAccepting('grandchild', '/project')).resolves.toBe(false);
     await runtime.setSessionPolicy('child', true);
     await expect(runtime.isSessionAutoAccepting('grandchild', '/project')).resolves.toBe(true);
+  });
+
+  it('keeps a subagent\'s lineage when a later partial update names only its title', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({}));
+    const { runtime, emit } = createRuntime({ fetchImpl });
+    await runtime.setSessionPolicy('root', true);
+    emit({ type: 'session.created', properties: { info: { id: 'child', parentID: 'root', directory: '/project' } } });
+    // v2 renames arrive as partial session records without parentID.
+    emit({ type: 'session.updated', properties: { info: { id: 'child', title: 'Subagent' } } });
+    emit({ type: 'permission.asked', properties: { id: 'p1', sessionID: 'child', permission: 'bash', metadata: {} } });
+    await flush();
+    const replies = fetchImpl.mock.calls.map(([url]) => new URL(url).pathname).filter((path) => path.endsWith('/reply'));
+    expect(replies).toEqual(['/api/session/child/permission/p1/reply']);
   });
 
   it('fetches missing subagent lineage before replying', async () => {
@@ -125,7 +143,7 @@ describe('permission auto-accept runtime', () => {
       const parsed = new URL(url);
       const path = parsed.pathname;
       if (path === '/api/permission/request') {
-        return parsed.searchParams.get('directory') === '/project'
+        return directoryHeader(init) === '/project'
           ? Response.json([
             { id: 'root-pending', sessionID: 'root' },
             { id: 'other-pending', sessionID: 'other' },
@@ -144,7 +162,8 @@ describe('permission auto-accept runtime', () => {
       .filter(([, init]) => init?.method === 'POST')
       .map(([url]) => new URL(url).pathname);
     expect(replyPaths).toEqual(['/api/session/root/permission/root-pending/reply']);
-    expect(fetchImpl.mock.calls.some(([url]) => new URL(url).searchParams.get('directory') === '/project')).toBe(true);
+    // OpenCode 2.x scopes the pending list by header, not by query.
+    expect(fetchImpl.mock.calls.some(([, init]) => directoryHeader(init) === '/project')).toBe(true);
     expect(await runtime.load()).toEqual({ sessions: { root: true }, revision: 1 });
   });
 
@@ -165,8 +184,9 @@ describe('permission auto-accept runtime', () => {
     emit({ type: 'permission.asked', properties: { id: 'safe', sessionID: 'root', permission: 'bash', metadata: {} } });
     await flush();
 
-    const replies = fetchImpl.mock.calls.map(([url]) => String(url)).filter((url) => url.includes('/reply'));
-    expect(replies).toEqual(['http://opencode.test/api/session/root/permission/safe/reply?directory=%2Fproject']);
+    const replies = fetchImpl.mock.calls.filter(([url]) => String(url).includes('/reply'));
+    expect(replies.map(([url]) => String(url))).toEqual(['http://opencode.test/api/session/root/permission/safe/reply']);
+    expect(directoryHeader(replies[0]?.[1])).toBe('/project');
     expect(evaluatePermission).toHaveBeenCalledTimes(2);
 
     emit({ type: 'permission.replied', properties: { sessionID: 'root', requestID: 'held', reply: 'once' } });

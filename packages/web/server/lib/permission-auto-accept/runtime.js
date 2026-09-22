@@ -90,13 +90,18 @@ export function createPermissionAutoAcceptRuntime({
 
   const rememberSession = (info, directoryHint) => {
     if (!info || typeof info.id !== 'string' || !info.id) return;
-    sessions.set(info.id, {
-      parentID: typeof info.parentID === 'string' && info.parentID ? info.parentID : null,
-      // v2 keeps the directory on `location`; translated events already flatten it.
-      directory: typeof info.directory === 'string' && info.directory
-        ? info.directory
-        : (typeof info.location?.directory === 'string' && info.location.directory ? info.location.directory : directoryHint),
-    });
+    // v2 session updates are partial (a rename carries only the title), so a
+    // field the update does not name keeps what an earlier record said.
+    const previous = sessions.get(info.id);
+    const parentID = typeof info.parentID === 'string' && info.parentID ? info.parentID : previous?.parentID ?? null;
+    // v2 keeps the directory on `location`; translated events already flatten it.
+    const directory = typeof info.directory === 'string' && info.directory
+      ? info.directory
+      : (typeof info.location?.directory === 'string' && info.location.directory
+        ? info.location.directory
+        : previous?.directory ?? directoryHint);
+    if (previous) sessions.delete(info.id);
+    sessions.set(info.id, { parentID, directory });
     if (sessions.size > SESSION_CACHE_LIMIT) {
       sessions.delete(sessions.keys().next().value);
     }
@@ -104,12 +109,14 @@ export function createPermissionAutoAcceptRuntime({
 
   const request = async (path, { directory, method = 'GET', body } = {}) => {
     const url = new URL(buildOpenCodeUrl(path, ''));
-    if (directory) url.searchParams.set('directory', directory);
     const response = await fetchImpl(url, {
       method,
       headers: {
         Accept: 'application/json',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
+        // OpenCode 2.x scopes a request to a directory through this header;
+        // the pending-permission list and services behind it are per location.
+        ...(directory ? { 'x-opencode-directory': encodeURIComponent(directory) } : {}),
         ...getOpenCodeAuthHeaders(),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
