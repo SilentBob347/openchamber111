@@ -425,6 +425,8 @@ async function deployWeb(options, config) {
   step('Installing package globally', () => {
     // Only for this install: `openchamber update` later runs `bun add -g` on the
     // same manifest and must resolve the published SDK, not this checkout's tarball.
+    // That update re-resolves the lockfile but keeps the SDK this deploy put on disk
+    // while the version number matches; `bun remove -g @openchamber/web` first clears it.
     const restoreManifest = pointSdkAtArchive(globalBunDir(), sdkFile);
     try {
       run('bun', ['add', '-g', packageFile]);

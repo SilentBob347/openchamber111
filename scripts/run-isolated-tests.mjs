@@ -73,12 +73,19 @@ const run = ({ command, args }) => new Promise((resolve) => {
   const timer = setTimeout(() => {
     timedOut = true;
     // A process the test started can hold the pipes open after the kill, so
-    // `close` may never come. Stop reading and settle on `exit`.
-    child.once('exit', () => {
+    // `close` may never come. Stop reading and settle on `exit`. The file may
+    // also have exited on its own long ago with only that process left; then
+    // `exit` is over and the settle happens right away.
+    const settle = () => {
       child.stdout.destroy();
       child.stderr.destroy();
       resolve({ code: 1, output: report(), dropped, timedOut });
-    });
+    };
+    if (child.exitCode !== null || child.signalCode !== null) {
+      settle();
+      return;
+    }
+    child.once('exit', settle);
     child.kill('SIGKILL');
   }, FILE_TIMEOUT_MS);
   let output = '';

@@ -35,7 +35,7 @@ const removeWhenReleased = async (directory: string) => {
   }
 };
 
-const holdingCommand =(marker: string) => `
+const holdingCommand = (marker: string) => `
   process.on('SIGTERM', () => {});
   require('node:fs').appendFileSync(${JSON.stringify(marker)}, process.pid + '\\n');
   setInterval(() => {}, 1000);
