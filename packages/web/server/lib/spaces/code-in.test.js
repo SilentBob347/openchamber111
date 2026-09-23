@@ -863,8 +863,10 @@ describe.skipIf(WIN)('transfer into a local stand-in for a space', () => {
       '[maintenance]', '\tauto = true', '\tautoDetach = false', '\tstrategy = gc',
       '[maintenance "gc"]', '\tenabled = true',
     ].join('\n'));
-    // The control, in the copy: with this config an ordinary commit consolidates the packs.
-    control.g(['commit', '--quiet', '--allow-empty', '-m', 'control']);
+    // The control, in the copy: with this config an ordinary commit consolidates the packs. Plain
+    // git here, not `control.g`: the setup git opts out of maintenance, which is what the control proves.
+    const commit = spawnSync('git', ['-C', control.repo, 'commit', '--quiet', '--allow-empty', '-m', 'control'], { env: host.environment, encoding: 'utf8', windowsHide: true });
+    expect(commit.status, commit.stderr).toBe(0);
     expect(packs(control.repo)).toBe(1);
     const before = hostState(bait.repo);
     await everything(host, bait.repo);
