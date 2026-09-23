@@ -55,16 +55,30 @@ const resolveCommand = (file) => {
   return null;
 };
 
+// Only the tail of a file's output is kept for its failure report. A test that
+// logs in a loop otherwise grows the buffer past V8's string limit and takes
+// the whole run down with a RangeError that names no file.
+const OUTPUT_TAIL_BYTES = 1024 * 1024;
+
 const run = ({ command, args }) => new Promise((resolve) => {
   const child = spawn(command, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk; });
-  child.stderr.on('data', (chunk) => { output += chunk; });
-  child.on('error', (error) => resolve({ code: 1, output: `${output}${error.message}` }));
-  child.on('close', (code) => resolve({ code: code ?? 1, output }));
+  let dropped = 0;
+  const append = (chunk) => {
+    output += chunk;
+    if (output.length > 2 * OUTPUT_TAIL_BYTES) {
+      dropped += output.length - OUTPUT_TAIL_BYTES;
+      output = output.slice(-OUTPUT_TAIL_BYTES);
+    }
+  };
+  const report = () => (dropped > 0 ? `[${dropped} earlier characters of output dropped]\n${output}` : output);
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('error', (error) => resolve({ code: 1, output: `${report()}${error.message}`, dropped }));
+  child.on('close', (code) => resolve({ code: code ?? 1, output: report(), dropped }));
 });
 
 const roots = process.argv.slice(2);
@@ -98,7 +112,8 @@ const worker = async () => {
       unknown.push(relative);
       continue;
     }
-    const { code, output } = await run(resolved);
+    const { code, output, dropped } = await run(resolved);
+    if (dropped > 0) console.error(`NOISY (${resolved.label}) ${relative}: ${dropped} characters of output dropped`);
     if (code === 0) {
       passed += 1;
     } else {
