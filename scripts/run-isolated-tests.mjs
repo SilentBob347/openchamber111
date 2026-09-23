@@ -60,11 +60,27 @@ const resolveCommand = (file) => {
 // the whole run down with a RangeError that names no file.
 const OUTPUT_TAIL_BYTES = 1024 * 1024;
 
+// A hung file is killed so it cannot block the run. The whole CI test step
+// takes about two minutes, so this leaves room for slower machines.
+const FILE_TIMEOUT_MS = 5 * 60 * 1000;
+
 const run = ({ command, args }) => new Promise((resolve) => {
   const child = spawn(command, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    // A process the test started can hold the pipes open after the kill, so
+    // `close` may never come. Stop reading and settle on `exit`.
+    child.once('exit', () => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve({ code: 1, output: report(), dropped, timedOut });
+    });
+    child.kill('SIGKILL');
+  }, FILE_TIMEOUT_MS);
   let output = '';
   let dropped = 0;
   const append = (chunk) => {
@@ -77,8 +93,14 @@ const run = ({ command, args }) => new Promise((resolve) => {
   const report = () => (dropped > 0 ? `[${dropped} earlier characters of output dropped]\n${output}` : output);
   child.stdout.on('data', append);
   child.stderr.on('data', append);
-  child.on('error', (error) => resolve({ code: 1, output: `${report()}${error.message}`, dropped }));
-  child.on('close', (code) => resolve({ code: code ?? 1, output: report(), dropped }));
+  child.on('error', (error) => {
+    clearTimeout(timer);
+    resolve({ code: 1, output: `${report()}${error.message}`, dropped, timedOut });
+  });
+  child.on('close', (code) => {
+    clearTimeout(timer);
+    resolve({ code: code ?? 1, output: report(), dropped, timedOut });
+  });
 });
 
 const roots = process.argv.slice(2);
@@ -112,9 +134,12 @@ const worker = async () => {
       unknown.push(relative);
       continue;
     }
-    const { code, output, dropped } = await run(resolved);
+    const { code, output, dropped, timedOut } = await run(resolved);
     if (dropped > 0) console.error(`NOISY (${resolved.label}) ${relative}: ${dropped} characters of output dropped`);
-    if (code === 0) {
+    if (timedOut) {
+      failures.push({ relative, label: resolved.label, output: `${output}\n[killed after ${FILE_TIMEOUT_MS / 1000}s]` });
+      console.error(`TIMEOUT (${resolved.label}) ${relative}`);
+    } else if (code === 0) {
       passed += 1;
     } else {
       failures.push({ relative, label: resolved.label, output });
