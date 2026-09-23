@@ -175,6 +175,13 @@ function run(command, args, options = {}) {
   return result.stdout?.trim() || '';
 }
 
+// VS Code's `code` is a .cmd shim on Windows, and Node spawns those only
+// through a shell, which then needs each argument quoted.
+function runCode(args, options = {}) {
+  if (process.platform !== 'win32') return run('code', args, options);
+  return run('code', args.map((arg) => `"${arg}"`), { ...options, shell: true, label: options.label || ['code', ...args].join(' ') });
+}
+
 function step(label, fn) {
   log.step(label);
   const result = fn();
@@ -655,7 +662,7 @@ function startVsCodeExtension() {
   const vscodeDir = path.join(repoRoot, 'packages/vscode');
   removeFilesByPrefixSuffix(vscodeDir, 'openchamber-', '.vsix');
   step('Building VS Code extension', () => run('bun', ['run', 'vscode:build']));
-  run('code', ['--extensionDevelopmentPath', vscodeDir]);
+  runCode(['--extensionDevelopmentPath', vscodeDir]);
 }
 
 async function installVsCodeExtensionLocal(options) {
@@ -672,10 +679,13 @@ async function installVsCodeExtensionLocal(options) {
   const vscodeDir = path.join(repoRoot, 'packages/vscode');
   step('Building VS Code extension', () => run('bun', ['run', '--cwd', 'packages/vscode', 'build']));
   step('Removing found VSIX package(s) before install flow', () => removeFilesByPrefixSuffix(vscodeDir, 'openchamber-', '.vsix'));
-  step('Packaging VSIX', () => run('bunx', ['vsce', 'package', '--no-dependencies'], { cwd: vscodeDir }));
+  step('Packaging VSIX', () => run('bun', ['x', 'vsce', 'package', '--no-dependencies'], { cwd: vscodeDir }));
   step('Installing VSIX locally', () => {
-    run('code', ['--uninstall-extension', 'fedaykindev.openchamber'], { label: 'uninstall old extension', allowFail: true });
-    run('code --install-extension packages/vscode/openchamber-*.vsix', [], { shell: true, label: 'install VSIX' });
+    runCode(['--uninstall-extension', 'fedaykindev.openchamber'], { label: 'uninstall old extension', allowFail: true });
+    // Found here rather than by a shell glob, which cmd.exe does not expand.
+    const vsix = readdirSync(vscodeDir).find((name) => name.startsWith('openchamber-') && name.endsWith('.vsix'));
+    if (!vsix) throw new Error('vsce package did not produce an openchamber-*.vsix');
+    runCode(['--install-extension', path.join(vscodeDir, vsix)], { label: 'install VSIX' });
   });
   if (cleanup === 'delete') {
     step('Removing local VSIX package(s) after install', () => removeFilesByPrefixSuffix(vscodeDir, 'openchamber-', '.vsix'));
