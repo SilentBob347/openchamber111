@@ -24,7 +24,7 @@
  * prompts for safety.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -299,9 +299,13 @@ function installedWebCli(directory) {
   return existsSync(cliPath) ? cliPath : '';
 }
 
-function installedGlobalWebCli() {
+function globalBunDir() {
   const bunInstall = process.env.BUN_INSTALL || path.join(os.homedir(), '.bun');
-  return installedWebCli(path.join(bunInstall, 'install', 'global'));
+  return path.join(bunInstall, 'install', 'global');
+}
+
+function installedGlobalWebCli() {
+  return installedWebCli(globalBunDir());
 }
 
 function stopInstalledInstance(directory, port) {
@@ -346,7 +350,21 @@ function packageWeb() {
   return { webFile, sdkFile };
 }
 
-/** Node one-liner that points the SDK dependency at a tarball; runs locally and over ssh. */
+/**
+ * Points the SDK dependency at a local tarball in the package.json of an install
+ * directory. Without it, bun resolves the web package's exact SDK version from
+ * npm, which between releases is the previous build of the SDK and lacks exports
+ * the web package on main already imports.
+ */
+function pointSdkAtArchive(directory, sdkPath) {
+  const manifestPath = path.join(directory, 'package.json');
+  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8').trim() || '{}') : {};
+  manifest.overrides = { ...(manifest.overrides || {}), '@openchamber/sdk': `file:${sdkPath.replaceAll('\\', '/')}` };
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/** Node one-liner that points the SDK dependency at a tarball; runs over ssh. */
 function sdkOverrideScript(sdkPath) {
   return `node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.overrides={...(p.overrides||{}),'@openchamber/sdk':'file:${sdkPath}'};fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')"`;
 }
@@ -396,7 +414,7 @@ async function deployWeb(options, config) {
     step('Preparing testing install directory', () => {
       resetDirectory(testingDir);
       run('bun', ['init', '-y'], { cwd: testingDir });
-      run('sh', ['-c', sdkOverrideScript(sdkFile)], { cwd: testingDir, label: 'point @openchamber/sdk at the local archive' });
+      pointSdkAtArchive(testingDir, sdkFile);
     });
     step('Installing testing package', () => run('bun', ['add', packageFile], { cwd: testingDir }));
     step(`Starting testing instance on ${TESTING_PORT}`, () => startInstalledInstance(testingDir, TESTING_PORT));
@@ -408,8 +426,10 @@ async function deployWeb(options, config) {
     run('bun', ['remove', '-g', '@openchamber/web'], { allowFail: true, label: 'remove @openchamber/web' });
     run('bun', ['remove', '-g', 'openchamber'], { allowFail: true, label: 'remove openchamber' });
   });
-  // A global install cannot carry an override, so it needs the SDK on npm (published with each release).
-  step('Installing package globally', () => run('bun', ['add', '-g', packageFile]));
+  step('Installing package globally', () => {
+    pointSdkAtArchive(globalBunDir(), sdkFile);
+    run('bun', ['add', '-g', packageFile]);
+  });
   step(`Starting global instance on ${GLOBAL_PORT}`, () => {
     const cliPath = installedGlobalWebCli();
     if (!cliPath) throw new Error('Global OpenChamber CLI was not installed by bun add -g');
