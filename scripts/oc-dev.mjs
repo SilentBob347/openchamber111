@@ -24,12 +24,13 @@
  * prompts for safety.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cancel, intro, isCancel, log, outro, select, text } from '@clack/prompts';
 import { RELEASE_PACKAGE_FILES } from './bump-version.mjs';
+import { pointSdkAtArchive } from './lib/sdk-override.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -357,20 +358,6 @@ function packageWeb() {
   return { webFile, sdkFile };
 }
 
-/**
- * Points the SDK dependency at a local tarball in the package.json of an install
- * directory. Without it, bun resolves the web package's exact SDK version from
- * npm, which between releases is the previous build of the SDK and lacks exports
- * the web package on main already imports.
- */
-function pointSdkAtArchive(directory, sdkPath) {
-  const manifestPath = path.join(directory, 'package.json');
-  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8').trim() || '{}') : {};
-  manifest.overrides = { ...(manifest.overrides || {}), '@openchamber/sdk': `file:${sdkPath.replaceAll('\\', '/')}` };
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
 /** Node one-liner that points the SDK dependency at a tarball; runs over ssh. */
 function sdkOverrideScript(sdkPath) {
   return `node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.overrides={...(p.overrides||{}),'@openchamber/sdk':'file:${sdkPath}'};fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')"`;
@@ -428,14 +415,22 @@ async function deployWeb(options, config) {
     return;
   }
 
-  step(`Stopping global instance on ${GLOBAL_PORT}`, () => run('openchamber', ['stop', '--port', GLOBAL_PORT], { allowFail: true, label: `stop global instance on ${GLOBAL_PORT}` }));
+  // The installed CLI, not `openchamber` from PATH: bun's global bin is often missing from PATH (Windows
+  // by default), and a stop that silently misses leaves the old server holding the port.
+  step(`Stopping global instance on ${GLOBAL_PORT}`, () => stopInstalledInstance(globalBunDir(), GLOBAL_PORT));
   step('Removing old global package', () => {
     run('bun', ['remove', '-g', '@openchamber/web'], { allowFail: true, label: 'remove @openchamber/web' });
     run('bun', ['remove', '-g', 'openchamber'], { allowFail: true, label: 'remove openchamber' });
   });
   step('Installing package globally', () => {
-    pointSdkAtArchive(globalBunDir(), sdkFile);
-    run('bun', ['add', '-g', packageFile]);
+    // Only for this install: `openchamber update` later runs `bun add -g` on the
+    // same manifest and must resolve the published SDK, not this checkout's tarball.
+    const restoreManifest = pointSdkAtArchive(globalBunDir(), sdkFile);
+    try {
+      run('bun', ['add', '-g', packageFile]);
+    } finally {
+      restoreManifest();
+    }
   });
   step(`Starting global instance on ${GLOBAL_PORT}`, () => {
     const cliPath = installedGlobalWebCli();
